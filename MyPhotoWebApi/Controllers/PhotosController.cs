@@ -9,9 +9,10 @@ using System.Threading.Tasks;
 
 namespace MyPhotoWebApi.Controllers
 {
-    [ApiVersion("1.0")] // can be removed
+    [ApiVersion("1.0")] // can be removed 
+    [ApiExplorerSettings(IgnoreApi = false)]
     public class PhotosController : ODataController    
-    {
+    { 
         [EnableQuery]
         public IQueryable<Photo> Get()
         {

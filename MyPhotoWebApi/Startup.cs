@@ -14,6 +14,15 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.OData;
 using Microsoft.OData.UriParser;
+using System;
+using Microsoft.Net.Http.Headers;
+using Microsoft.AspNet.OData.Formatter;
+using Microsoft.OpenApi.Models;
+using System.Reflection;
+using System.IO;
+using Swashbuckle.AspNetCore.Swagger;
+using Microsoft.AspNetCore.Mvc.ApiExplorer;
+using NSwag.AspNetCore;
 
 namespace MyPhotoWebApi
 {
@@ -30,17 +39,45 @@ namespace MyPhotoWebApi
         public void ConfigureServices(IServiceCollection services)
         {
             services.AddMvcCore(options =>
-            {
+            { 
                 options.EnableEndpointRouting = false;
-            });
+            }).AddApiExplorer()
+            .AddFormatterMappings()
+            .AddDataAnnotations()
+            .AddJsonFormatters()
+            .AddCors()
+            .SetCompatibilityVersion(CompatibilityVersion.Version_2_2);
+
+            // Register the Swagger generator, defining 1 or more Swagger documents, obselete, this is replaced by OpenAPIDocument from NSwag
+            //services.AddSwaggerGen(c =>
+            //{ 
+            //    c.SwaggerDoc("v1", new OpenApiInfo { Title = "My photo API", Version = "v1" }); 
+
+            //    // Set the comments path for the Swagger JSON and UI.
+            //    var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+            //    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+            //    c.IncludeXmlComments(xmlPath);
+            //});
+            services.AddOpenApiDocument();
             services.AddMvc().SetCompatibilityVersion(CompatibilityVersion.Version_2_2);
             services.AddApiVersioning(o =>
             {
                 o.AssumeDefaultVersionWhenUnspecified = true;
                 o.DefaultApiVersion = new ApiVersion(1, 0);
+            }).AddVersionedApiExplorer(o=>
+            {
+                o.AssumeDefaultVersionWhenUnspecified = true;
+                o.SubstituteApiVersionInUrl = true;
+                o.GroupNameFormat = "'v'V";
             });
+
+          
+
             services.AddOData().EnableApiVersioning(); 
-          //  services.AddSingleton(sp => new ODataUriResolver() { EnableCaseInsensitive = true });  // this doesn't work, why?
+            services.AddODataApiExplorer(); 
+
+          
+            //  services.AddSingleton(sp => new ODataUriResolver() { EnableCaseInsensitive = true });  // this doesn't work, why?
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
@@ -57,24 +94,51 @@ namespace MyPhotoWebApi
             }
             
             app.UseHttpsRedirection();
-            app.UseMvc(builder =>
-            {
-                //builder.EnableDependencyInjection(containerBuilder => containerBuilder.AddService(
-                //  Microsoft.OData.ServiceLifetime.Singleton,
-                //  typeof(ODataUriResolver),
-                //      _ => app.ApplicationServices.GetRequiredService<     var resolver = app.ApplicationServices.GetRequiredService<Microsoft.OData.UriParser.ODataUriResolver>();>())  // this doesn't work, why?
-                //);
-              //  builder.EnableDependencyInjection();
-                builder.Select().Expand().Filter().OrderBy().Count().MaxTop(100);
-                  builder.MapVersionedODataRoutes("odata", "odata", modelBuilder.GetEdmModels()
-              //       , b => {  b.AddService<ODataUriResolver>(Microsoft.OData.ServiceLifetime.Singleton, sp => new CaseInsensitiveResolver());}
-                      );
-             
-                //builder.MapODataServiceRoute("ODataRoute", "odata",
-                //     b => b.AddService(Microsoft.OData.ServiceLifetime.Singleton, sp => modelBuilder.GetEdmModels())
-                //.AddService<ODataUriResolver>(Microsoft.OData.ServiceLifetime.Singleton, sp => new CaseInsensitiveResolver()));
 
-            }); 
+            // Enable middleware to serve generated Swagger as a JSON endpoint.
+            //https://github.com/RicoSuter/NSwag/wiki/AspNetCore-Middleware
+            app.UseOpenApi();//from NSwag to replace useSwagger()
+            app.UseSwaggerUi3();  //replace UseSwaggerUI()
+
+            app.UseMvc();             
+            app.UseWhen(
+                    context => context.Request.Path.StartsWithSegments("/odata", StringComparison.InvariantCultureIgnoreCase),
+
+                    app1 => app1
+
+                        .UseMvc(builder =>
+
+                        {
+                          
+                            var mvcOptions = builder.ApplicationBuilder.ApplicationServices
+
+                                .GetService<Microsoft.Extensions.Options.IOptions<MvcOptions>>();
+
+
+
+                            foreach (var outputFormatter in mvcOptions.Value.OutputFormatters.OfType<ODataOutputFormatter>().Where(_ => _.SupportedMediaTypes.Count == 0))
+
+                            {
+
+                                outputFormatter.SupportedMediaTypes.Add(new MediaTypeHeaderValue("application/prs.odatatestxx-odata"));
+
+                            }
+
+                            foreach (var inputFormatter in mvcOptions.Value.InputFormatters.OfType<ODataInputFormatter>().Where(_ => _.SupportedMediaTypes.Count == 0))
+
+                            {
+
+                                inputFormatter.SupportedMediaTypes.Add(new MediaTypeHeaderValue("application/prs.odatatestxx-odata"));
+
+                            }
+
+
+
+                            builder.Select().Expand().Filter().OrderBy().Count().MaxTop(100);
+
+                            builder.MapVersionedODataRoutes("odataRoutes", "odata", modelBuilder.GetEdmModels());
+
+                        }));
 
             BsonClassMap.RegisterClassMap<Photo>(cm => {
                 cm.AutoMap();

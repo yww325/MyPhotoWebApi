@@ -1,28 +1,22 @@
 ﻿using Microsoft.AspNet.OData.Builder;
 using Microsoft.AspNet.OData.Extensions;
+using Microsoft.AspNet.OData.Formatter;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.OData.Edm;
-using Microsoft.OData.UriParser;
-using MongoDB.Bson.Serialization;
-using MyPhotoWebApi.Models;
-using System.Collections.Generic;
-using System.Linq;
-using Microsoft.OData;
-using Microsoft.OData.UriParser;
-using System;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Logging;
 using Microsoft.Net.Http.Headers;
-using Microsoft.AspNet.OData.Formatter;
-using Microsoft.OpenApi.Models;
-using System.Reflection;
-using System.IO;
-using Swashbuckle.AspNetCore.Swagger;
-using Microsoft.AspNetCore.Mvc.ApiExplorer;
-using NSwag.AspNetCore;
+using Microsoft.OData;
+using MongoDB.Bson.Serialization;
+using MongoDB.Driver;
+using MyPhotoWebApi.Models;
+using MyPhotoWebApi.Services;
+using System;
+using System.Linq;
 
 namespace MyPhotoWebApi
 {
@@ -31,13 +25,25 @@ namespace MyPhotoWebApi
         public Startup(IConfiguration configuration)
         {
             Configuration = configuration;
+            _myPhotoSettings = new MyPhotoSettings();
+            Configuration.GetSection(nameof(MyPhotoSettings)).Bind(_myPhotoSettings);
+            _fileProvider = new PhysicalFileProvider(_myPhotoSettings.RootFolder);
         }
 
         public IConfiguration Configuration { get; }
 
+        private readonly MyPhotoSettings _myPhotoSettings;
+        private readonly PhysicalFileProvider _fileProvider;
+
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
+            services.AddLogging(loggingBuilder =>
+            {
+                loggingBuilder.AddConfiguration(Configuration.GetSection("Logging"));
+                loggingBuilder.AddConsole();
+                loggingBuilder.AddDebug();
+            });
             services.AddMvcCore(options =>
             { 
                 options.EnableEndpointRouting = false;
@@ -69,20 +75,17 @@ namespace MyPhotoWebApi
                 o.AssumeDefaultVersionWhenUnspecified = true;
                 o.SubstituteApiVersionInUrl = true;
                 o.GroupNameFormat = "'v'V";
-            });
-
-          
-
+            }); 
             services.AddOData().EnableApiVersioning(); 
             services.AddODataApiExplorer(); 
 
-          
+            RegisterMyServices(services); 
             //  services.AddSingleton(sp => new ODataUriResolver() { EnableCaseInsensitive = true });  // this doesn't work, why?
-        }
+        } 
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
         public void Configure(IApplicationBuilder app, IHostingEnvironment env, VersionedODataModelBuilder modelBuilder)
-        {
+        {  
             if (env.IsDevelopment())
             {
                 app.UseDeveloperExceptionPage();
@@ -102,51 +105,43 @@ namespace MyPhotoWebApi
 
             app.UseMvc();             
             app.UseWhen(
+                    // https://github.com/OData/WebApi/issues/1177 OutputFormatters issue
                     context => context.Request.Path.StartsWithSegments("/odata", StringComparison.InvariantCultureIgnoreCase),
-
-                    app1 => app1
-
-                        .UseMvc(builder =>
-
-                        {
-                          
-                            var mvcOptions = builder.ApplicationBuilder.ApplicationServices
-
-                                .GetService<Microsoft.Extensions.Options.IOptions<MvcOptions>>();
-
-
-
-                            foreach (var outputFormatter in mvcOptions.Value.OutputFormatters.OfType<ODataOutputFormatter>().Where(_ => _.SupportedMediaTypes.Count == 0))
-
-                            {
-
-                                outputFormatter.SupportedMediaTypes.Add(new MediaTypeHeaderValue("application/prs.odatatestxx-odata"));
-
-                            }
-
+                    app1 => app1.UseMvc(builder => 
+                        { 
+                            var mvcOptions = builder.ApplicationBuilder.ApplicationServices.GetService<Microsoft.Extensions.Options.IOptions<MvcOptions>>(); 
+                            foreach (var outputFormatter in mvcOptions.Value.OutputFormatters.OfType<ODataOutputFormatter>().Where(_ => _.SupportedMediaTypes.Count == 0)) 
+                            { 
+                                outputFormatter.SupportedMediaTypes.Add(new MediaTypeHeaderValue("application/prs.odatatestxx-odata")); 
+                            } 
                             foreach (var inputFormatter in mvcOptions.Value.InputFormatters.OfType<ODataInputFormatter>().Where(_ => _.SupportedMediaTypes.Count == 0))
-
                             {
+                                inputFormatter.SupportedMediaTypes.Add(new MediaTypeHeaderValue("application/prs.odatatestxx-odata")); 
+                            } 
+                            builder.Select().Expand().Filter().OrderBy().Count().MaxTop(100); 
+                            builder.MapVersionedODataRoutes("odataRoutes", "odata", modelBuilder.GetEdmModels()); 
+                        })); 
+            app.UseStaticFiles(new StaticFileOptions()
+            {
+                FileProvider = _fileProvider,
+                RequestPath = new PathString(_myPhotoSettings.FileUrl)
+            });
+        }
 
-                                inputFormatter.SupportedMediaTypes.Add(new MediaTypeHeaderValue("application/prs.odatatestxx-odata"));
-
-                            }
-
-
-
-                            builder.Select().Expand().Filter().OrderBy().Count().MaxTop(100);
-
-                            builder.MapVersionedODataRoutes("odataRoutes", "odata", modelBuilder.GetEdmModels());
-
-                        }));
-
+        private void RegisterMyServices(IServiceCollection services)
+        {  
+            services.AddSingleton<IFileProvider, PhysicalFileProvider>(sp => _fileProvider);
+            services.AddSingleton<FileIngestionService, FileIngestionService>();
+            services.AddSingleton<IMongoClient, MongoClient>(sp => 
+            { 
+                return new MongoClient(_myPhotoSettings.ConnectionString);
+            });
+            services.AddTransient<IMongoDatabase, IMongoDatabase>(sp => 
+            {
+                return sp.GetService<IMongoClient>().GetDatabase(_myPhotoSettings.DatabaseName);
+            });
             BsonClassMap.RegisterClassMap<Photo>(cm => {
                 cm.AutoMap();
-                cm.GetMemberMap(c => c.FileName).SetElementName("fileName");
-                cm.GetMemberMap(c => c.Path).SetElementName("path");
-                cm.GetMemberMap(c => c.Year).SetElementName("year");
-                cm.GetMemberMap(c => c.Month).SetElementName("month");
-                cm.GetMemberMap(c => c.Tags).SetElementName("tags");
                 cm.SetIgnoreExtraElements(true);
             });
         }

@@ -1,18 +1,31 @@
 ﻿using MongoDB.Bson;
+using MongoDB.Bson.Serialization.Attributes;
 using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 
 namespace MyPhotoWebApi.Models
 {
     public class Photo
     {
-        public ObjectId Id { get; set; }
+        [BsonId]
+        [BsonRepresentation(BsonType.ObjectId)]
+        public string Id { get; set; }
+
+        [BsonElement("fileName")]
         public string FileName { get; set; }
+
+        [BsonElement("mediaType")]
+        public string MediaType { get; set; }
+
+        [BsonElement("path")]
         public string Path { get; set; }
-        public int Year { get; set; }
-        public int Month { get; set; }
+
+        [BsonElement("dateTaken")]
+        public DateTime DateTaken { get; set; }  
+        
+        [BsonElement("tags")]
         public string[] Tags { get; set; }
+
+        [BsonElement("thumbnail")]
+        public Byte[] Thumbnail { get; set; }
     }
 }

@@ -11,47 +11,58 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using MongoDB.Bson;
+using MongoDB.Driver.Core.Misc;
 
 namespace MyPhotoWebApi.Services
 {
     public class FileIngestionService
     {
         private readonly ILogger<FileIngestionService> _logger;
-        private readonly IMongoCollection<Photo> _mongoCollection;
+        private readonly IMongoCollection<Photo> _photoCollection;
+        private readonly IMongoCollection<Folder> _folderCollection;
         private readonly IFileProvider _fileProvider;
 
         public FileIngestionService(ILogger<FileIngestionService> logger, IMongoDatabase mongoDatabase, IFileProvider fileProvider)
         {
             _logger = logger;
-            _mongoCollection = mongoDatabase.GetCollection<Photo>("photos"); ;
+            _photoCollection = mongoDatabase.GetCollection<Photo>("photos");
+            _folderCollection = mongoDatabase.GetCollection<Folder>("folders");
             _fileProvider = fileProvider;
         }
 
         public async Task<IngestResult> Ingest(string ingestFolder, bool recursive)
         { 
-            _logger.LogInformation($"Ingesting folder:{ingestFolder}, recusive={recursive}"); 
-            var ingestResult = await IngestOneFolder(ingestFolder, recursive); 
+            _logger.LogInformation($"Ingesting folder:{ingestFolder}, recursive={recursive}");
+            var ingestResult = await IngestOneFolder(ingestFolder, recursive, BsonObjectId.Empty.ToString());  // root folder
             return ingestResult;
         }
 
-        private async Task<IngestResult> IngestOneFolder(string path, bool recursive)
+        private async Task<IngestResult> IngestOneFolder(string path, bool recursive, string parentFolderId)
         {
-            var ingestResult = new IngestResult();
-            var photos = new List<Photo>();
-            var tags = path.Split('\\');
+            var ingestResult = new IngestResult(); 
             var contents = _fileProvider.GetDirectoryContents(path);
+            if (!contents.Exists) return ingestResult; //something wrong, folder not exists. 
+
+            var photos = new List<Photo>();
+            var tags = path.Split('\\').Select(s => s.ToLowerInvariant()).ToArray();
+            var name = tags.Last();
+            var currentFolder = await GetOrCreateFolder(path, name, parentFolderId);
+
             foreach (var fileInfo in contents)
             {
                 if (fileInfo.IsDirectory)
                 {
-                    var subFolderResult = await IngestOneFolder(path + "\\" + fileInfo.Name, recursive);
-                    ingestResult.Absorb(subFolderResult);
+                    if (recursive)
+                    {
+                        var subFolderResult = await IngestOneFolder(path + "\\" + fileInfo.Name, true, currentFolder.Id);
+                        ingestResult.Absorb(subFolderResult);
+                    } 
                     continue;
-                }
-
+                } 
                 var photo = new Photo()
                 {
-                    FileName = fileInfo.Name,
+                    FileName = fileInfo.Name, 
                     Path = path,
                     Tags = tags
                 }; 
@@ -70,7 +81,7 @@ namespace MyPhotoWebApi.Services
                     photo.MediaType = "sound";
                     ingestResult.SoundsFound++;
                 }
-                else if (fileInfo.Name.EndsWith(".avi"))
+                else if (fileInfo.Name.EndsWith(".avi") || fileInfo.Name.EndsWith(".mp4"))
                 {
                     photo.MediaType = "video";
                     ingestResult.VideosFound++;
@@ -87,10 +98,25 @@ namespace MyPhotoWebApi.Services
 
             if (photos.Count > 0)
             {
-                await _mongoCollection.InsertManyAsync(photos, new InsertManyOptions() { IsOrdered = false });
+                await _photoCollection.InsertManyAsync(photos, new InsertManyOptions() { IsOrdered = false });
             }
            
             return ingestResult;
+        }
+
+        private async Task<Folder> GetOrCreateFolder(string path, string name, string parentFolderId)
+        { 
+            var currentFolder = await _folderCollection.Find(f => f.Path == path).FirstOrDefaultAsync();
+            if (currentFolder != null) return currentFolder;
+
+            currentFolder = new Folder()
+            {
+                Path = path,
+                Name = name,
+                ParentFolderId = parentFolderId 
+            };
+            await _folderCollection.InsertOneAsync(currentFolder); 
+            return currentFolder;
         }
 
         #region Image Processing

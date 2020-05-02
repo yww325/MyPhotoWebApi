@@ -10,8 +10,7 @@ using MyPhotoWebApi.Services;
 namespace MyPhotoWebApi.Controllers
 { 
     [ApiVersion("1.0")] // can be removed, default version
-    //[Route("api/v{version:apiVersion}/[controller]")] // will use if we have future version
-    [Route("api/[controller]")]
+    [Route("api/v{version:apiVersion}/[controller]")]  
     [ApiController]
     public class DefaultController : ControllerBase
     {

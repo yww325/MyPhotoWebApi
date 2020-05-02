@@ -10,7 +10,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
 using Microsoft.Net.Http.Headers;
-using Microsoft.OData;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
 using MyPhotoWebApi.Models;
@@ -44,6 +43,12 @@ namespace MyPhotoWebApi
                 loggingBuilder.AddConsole();
                 loggingBuilder.AddDebug();
             });
+
+            services.Configure<IISServerOptions>(options =>
+            {
+                options.AutomaticAuthentication = false;
+            });
+
             services.AddMvcCore(options =>
             { 
                 options.EnableEndpointRouting = false;
@@ -77,10 +82,18 @@ namespace MyPhotoWebApi
                 o.GroupNameFormat = "'v'V";
             }); 
             services.AddOData().EnableApiVersioning(); 
-            services.AddODataApiExplorer(); 
-
+            services.AddODataApiExplorer(o =>
+            {
+                o.AssumeDefaultVersionWhenUnspecified = true;
+                o.SubstituteApiVersionInUrl = true;
+                o.GroupNameFormat = "'v'V";
+            });
+            services.AddCors(c =>
+            {
+                c.AddPolicy("AllowAnyPolicy", options => options.AllowAnyOrigin()); 
+            });
             RegisterMyServices(services); 
-            //  services.AddSingleton(sp => new ODataUriResolver() { EnableCaseInsensitive = true });  // this doesn't work, why?
+           // services.AddSingleton(sp => new ODataUriResolver() { EnableCaseInsensitive = true });  // this doesn't work, why?
         } 
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
@@ -118,8 +131,9 @@ namespace MyPhotoWebApi
                             {
                                 inputFormatter.SupportedMediaTypes.Add(new MediaTypeHeaderValue("application/prs.odatatestxx-odata")); 
                             } 
-                            builder.Select().Expand().Filter().OrderBy().Count().MaxTop(100); 
-                            builder.MapVersionedODataRoutes("odataRoutes", "odata", modelBuilder.GetEdmModels()); 
+                            builder.Select().Expand().Filter().OrderBy().Count().MaxTop(100);
+                            //https://github.com/microsoft/aspnet-api-versioning/issues/515
+                            builder.MapVersionedODataRoutes("odataRoutes", "odata/v{version:apiVersion}", modelBuilder.GetEdmModels()); 
                         })); 
             app.UseStaticFiles(new StaticFileOptions()
             {
@@ -141,6 +155,10 @@ namespace MyPhotoWebApi
                 return sp.GetService<IMongoClient>().GetDatabase(_myPhotoSettings.DatabaseName);
             });
             BsonClassMap.RegisterClassMap<Photo>(cm => {
+                cm.AutoMap();
+                cm.SetIgnoreExtraElements(true);
+            });
+            BsonClassMap.RegisterClassMap<Folder>(cm => {
                 cm.AutoMap();
                 cm.SetIgnoreExtraElements(true);
             });

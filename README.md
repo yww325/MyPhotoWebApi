@@ -1,0 +1,2 @@
+# MyPhotoWebApi
+server side

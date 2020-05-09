@@ -1,0 +1,1 @@
+﻿db.photos.createIndex({ "path": 1, "tags": 1, "dateTaken": 1, "private": 1 }, { "name": "MyIndex", "ns": "testdb.photos", "background": true })

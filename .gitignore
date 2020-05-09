@@ -1,4 +1,6 @@
 ﻿# ignore visual studio folders and files
+.config/
+*.DotSettings
 *.suo
 *.user
 *.userosscache

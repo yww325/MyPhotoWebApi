@@ -79,11 +79,13 @@ namespace MyPhotoWebApi.Services
                 else if (fileInfo.Name.EndsWith(".wav"))
                 {
                     photo.MediaType = "sound";
+                    photo.DateTaken = DateTime.Now;
                     ingestResult.SoundsFound++;
                 }
                 else if (fileInfo.Name.EndsWith(".avi") || fileInfo.Name.EndsWith(".mp4"))
                 {
                     photo.MediaType = "video";
+                    photo.DateTaken = DateTime.Now;
                     ingestResult.VideosFound++;
                 }
                 else
@@ -125,15 +127,24 @@ namespace MyPhotoWebApi.Services
         private static readonly ImageCodecInfo myImageCodecInfo = GetEncoderInfo("image/jpeg");
         private static readonly EncoderParameters myEncoderParameters = GetEncoderParameters();
 
-        private static Tuple<DateTime, byte[]> GetDateTakenAndThumbnailFromImage(string path)
+        private Tuple<DateTime, byte[]> GetDateTakenAndThumbnailFromImage(string path)
         {
             using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
             using (Image myImage = Image.FromStream(fs, false, false))
             {
                 // https://stackoverflow.com/questions/180030/how-can-i-find-out-when-a-picture-was-actually-taken-in-c-sharp-running-on-vista
-                PropertyItem propItem = myImage.GetPropertyItem(36867);
-                string dateTakenStr = r.Replace(Encoding.UTF8.GetString(propItem.Value), "-", 2);
-                DateTime.TryParse(dateTakenStr, out var dateTaken);
+                DateTime dateTaken = DateTime.Now;
+                try
+                {
+                    PropertyItem propItem = myImage.GetPropertyItem(36867);
+                    string dateTakenStr = r.Replace(Encoding.UTF8.GetString(propItem.Value), "-", 2);
+                    DateTime.TryParse(dateTakenStr, out dateTaken);
+                }
+                catch (Exception)
+                {
+                    _logger.LogWarning($"image file {path} can't load dateTaken ");
+                }
+              
                 var ratio = (double)myImage.Width / myImage.Height;
                 var width = ratio > 1 ? ThumbnailLongSide : ThumbnailLongSide * ratio;
                 var height = ratio < 1 ? ThumbnailLongSide : ThumbnailLongSide / ratio;

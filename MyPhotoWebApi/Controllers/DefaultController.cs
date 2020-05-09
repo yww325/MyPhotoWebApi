@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
@@ -26,7 +27,7 @@ namespace MyPhotoWebApi.Controllers
         // POST: api/Default
         [HttpPost("ingest")]
         [ProducesResponseType(typeof(IngestResult), StatusCodes.Status200OK)]
-        public async Task<ActionResult> Ingest([FromHeader]string userPass,[FromBody] IngestBody body)
+        public async Task<ActionResult> Ingest([FromHeader, Required]string userPass,[FromBody] IngestBody body)
         {
             if (userPass != Startup.HashedUserPass) return Unauthorized();
             var result = await _fileIngestionService.Ingest(body.IngestFolder, body.Recursive);
@@ -36,7 +37,7 @@ namespace MyPhotoWebApi.Controllers
         [HttpPatch("private")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        public async Task<ActionResult> MarkPrivate([FromHeader]string userPass, string path)
+        public async Task<ActionResult> MarkPrivate([FromHeader, Required]string userPass, string path)
         {
             if (userPass != Startup.HashedUserPass) return Unauthorized();
             var ret = await _photoService.MarkPrivate(path);

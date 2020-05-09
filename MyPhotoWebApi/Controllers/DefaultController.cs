@@ -15,19 +15,39 @@ namespace MyPhotoWebApi.Controllers
     public class DefaultController : ControllerBase
     {
         private readonly FileIngestionService _fileIngestionService;
+        private readonly PhotoService _photoService;
 
-        public DefaultController(FileIngestionService fileIngestionService)
+        public DefaultController(FileIngestionService fileIngestionService, PhotoService photoService)
         {
             _fileIngestionService = fileIngestionService;
+            _photoService = photoService;
         }
    
         // POST: api/Default
         [HttpPost("ingest")]
         [ProducesResponseType(typeof(IngestResult), StatusCodes.Status200OK)]
-        public async Task<ActionResult> Ingest([FromBody] IngestBody body)
+        public async Task<ActionResult> Ingest([FromHeader]string userPass,[FromBody] IngestBody body)
         {
+            if (userPass != Startup.HashedUserPass) return Unauthorized();
             var result = await _fileIngestionService.Ingest(body.IngestFolder, body.Recursive);
             return Ok(result); 
+        }
+
+        [HttpPatch("private")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<ActionResult> MarkPrivate([FromHeader]string userPass, string path)
+        {
+            if (userPass != Startup.HashedUserPass) return Unauthorized();
+            var ret = await _photoService.MarkPrivate(path);
+            if (ret)
+            {
+                return Ok();
+            }
+            else
+            {
+                return BadRequest();
+            }
         }
 
     }

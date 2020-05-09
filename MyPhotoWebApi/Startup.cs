@@ -12,21 +12,26 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Net.Http.Headers;
 using MongoDB.Bson.Serialization;
 using MongoDB.Driver;
+using MyPhotoWebApi.Helpers;
 using MyPhotoWebApi.Models;
 using MyPhotoWebApi.Services;
 using System;
+using System.IO;
 using System.Linq;
 
 namespace MyPhotoWebApi
 {
     public class Startup
     {
+        public static string HashedUserPass {get;set;}
         public Startup(IConfiguration configuration)
         {
             Configuration = configuration;
             _myPhotoSettings = new MyPhotoSettings();
             Configuration.GetSection(nameof(MyPhotoSettings)).Bind(_myPhotoSettings);
             _fileProvider = new PhysicalFileProvider(_myPhotoSettings.RootFolder);
+            var unHashedUserPass = File.ReadAllText(_myPhotoSettings.UserPassLocation);
+            HashedUserPass = MD5Helper.MD5Hash(unHashedUserPass); 
         }
 
         public IConfiguration Configuration { get; }
@@ -146,6 +151,7 @@ namespace MyPhotoWebApi
         {  
             services.AddSingleton<IFileProvider, PhysicalFileProvider>(sp => _fileProvider);
             services.AddSingleton<FileIngestionService, FileIngestionService>();
+            services.AddSingleton<PhotoService, PhotoService>();
             services.AddSingleton<IMongoClient, MongoClient>(sp => 
             { 
                 return new MongoClient(_myPhotoSettings.ConnectionString);
@@ -155,7 +161,7 @@ namespace MyPhotoWebApi
                 return sp.GetService<IMongoClient>().GetDatabase(_myPhotoSettings.DatabaseName);
             });
             BsonClassMap.RegisterClassMap<Photo>(cm => {
-                cm.AutoMap();
+                cm.AutoMap(); 
                 cm.SetIgnoreExtraElements(true);
             });
             BsonClassMap.RegisterClassMap<Folder>(cm => {

@@ -95,7 +95,12 @@ namespace MyPhotoWebApi
             });
             services.AddCors(c =>
             {
-                c.AddPolicy("AllowAnyPolicy", options => options.AllowAnyOrigin()); 
+                c.AddPolicy("AllowAnyPolicy", options =>
+                {
+                    options.AllowAnyOrigin(); 
+                    options.AllowAnyHeader();
+                    options.AllowAnyMethod();
+                }); 
             });
             RegisterMyServices(services); 
            // services.AddSingleton(sp => new ODataUriResolver() { EnableCaseInsensitive = true });  // this doesn't work, why?
@@ -120,7 +125,7 @@ namespace MyPhotoWebApi
             //https://github.com/RicoSuter/NSwag/wiki/AspNetCore-Middleware
             app.UseOpenApi();//from NSwag to replace useSwagger()
             app.UseSwaggerUi3();  //replace UseSwaggerUI()
-
+            app.UseCors("AllowAnyPolicy");
             app.UseMvc();             
             app.UseWhen(
                     // https://github.com/OData/WebApi/issues/1177 OutputFormatters issue

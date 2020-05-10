@@ -29,8 +29,7 @@ namespace MyPhotoWebApi.Controllers
         }
         // example Tags/any(s:contains(s, '重固'))
         // support null https://stackoverflow.com/questions/56962714/asp-net-core-odata-on-mongodb-like-filter
-        [EnableQuery(HandleNullPropagation = HandleNullPropagationOption.False)]
-        [EnableCors("AllowAnyPolicy")]
+        [EnableQuery(HandleNullPropagation = HandleNullPropagationOption.False)] 
         public IQueryable<Photo> Get([FromHeader]string userPass)
         {
             IQueryable<Photo> queryable = _photosCollection.AsQueryable();

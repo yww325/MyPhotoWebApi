@@ -21,8 +21,7 @@ namespace MyPhotoWebApi.Controllers
             _mongoCollection = mongoDatabase.GetCollection<Folder>("folders"); ;
         }
        
-        [EnableQuery(HandleNullPropagation = HandleNullPropagationOption.False)]
-        [EnableCors("AllowAnyPolicy")]
+        [EnableQuery(HandleNullPropagation = HandleNullPropagationOption.False)] 
         public IQueryable<Folder> Get()
         {
             return _mongoCollection.AsQueryable();

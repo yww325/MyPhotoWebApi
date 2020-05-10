@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
+using MyPhotoWebApi.Helpers;
 using MyPhotoWebApi.Models;
 using MyPhotoWebApi.Services;
 
@@ -35,16 +36,24 @@ namespace MyPhotoWebApi.Controllers
             return Ok(result); 
         }
 
+        [HttpGet("validate")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        public ActionResult Validate([FromQuery, Required, BindRequired]string userPass)
+        {
+            if (MD5Helper.MD5Hash(userPass) != Startup.HashedUserPass) return Unauthorized();
+            return Ok(Startup.HashedUserPass);
+        }
+
         [HttpPatch("private")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        public async Task<ActionResult> MarkPrivate([FromHeader, Required, BindRequired]string userPass, string path)
+        public async Task<ActionResult> MarkPrivate([FromHeader, Required, BindRequired]string userPass, [Required, BindRequired]string path, bool toPrivate = true)
         {
             if (userPass != Startup.HashedUserPass) return Unauthorized();
-            var ret = await _photoService.MarkPrivate(path);
+            var ret = await _photoService.MarkPrivate(path, toPrivate);
             if (ret)
             {
-                return Ok();
+                return Ok(path);
             }
             else
             {

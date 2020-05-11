@@ -157,6 +157,7 @@ namespace MyPhotoWebApi
             services.AddSingleton<IFileProvider, PhysicalFileProvider>(sp => _fileProvider);
             services.AddSingleton<FileIngestionService, FileIngestionService>();
             services.AddSingleton<PhotoService, PhotoService>();
+            services.AddSingleton<FolderService, FolderService>();            
             services.AddSingleton<IMongoClient, MongoClient>(sp => 
             { 
                 return new MongoClient(_myPhotoSettings.ConnectionString);

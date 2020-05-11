@@ -25,5 +25,10 @@ namespace MyPhotoWebApi.Services
             _logger.LogInformation("updated records: " + result.ModifiedCount);
             return true;
         }
+
+        public async Task CreateManyPhotos(IList<Photo> photos)
+        {
+            await _photosCollection.InsertManyAsync(photos, new InsertManyOptions() { IsOrdered = false });
+        }
     }
 }

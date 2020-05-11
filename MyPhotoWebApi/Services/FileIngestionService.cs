@@ -18,25 +18,29 @@ namespace MyPhotoWebApi.Services
 {
     public class FileIngestionService
     {
-        private readonly ILogger<FileIngestionService> _logger;
-        private readonly IMongoCollection<Photo> _photoCollection;
-        private readonly IMongoCollection<Folder> _folderCollection;
+        private readonly ILogger<FileIngestionService> _logger; 
         private readonly IFileProvider _fileProvider;
+        private readonly FolderService _folderService;
+        private readonly PhotoService _photoService;
 
-        public FileIngestionService(ILogger<FileIngestionService> logger, IMongoDatabase mongoDatabase, IFileProvider fileProvider)
+        public FileIngestionService(ILogger<FileIngestionService> logger, IFileProvider fileProvider, FolderService folderService, PhotoService photoService)
         {
-            _logger = logger;
-            _photoCollection = mongoDatabase.GetCollection<Photo>("photos");
-            _folderCollection = mongoDatabase.GetCollection<Folder>("folders");
+            _logger = logger; 
             _fileProvider = fileProvider;
+            _folderService = folderService;
+            _photoService = photoService;
         }
 
         public async Task<IngestResult> Ingest(string ingestFolder, bool recursive)
         { 
             _logger.LogInformation($"Ingesting folder:{ingestFolder}, recursive={recursive}");
-            var ingestResult = await IngestOneFolder(ingestFolder, recursive, BsonObjectId.Empty.ToString());  // root folder
+            var folderIndex = ingestFolder.LastIndexOf("\\");
+            var folderPath = folderIndex >=0 ? ingestFolder.Substring(0, folderIndex) : "";
+            string parentFolderId = await _folderService.FindFolderIdByPath(folderPath);
+            var ingestResult = await IngestOneFolder(ingestFolder, recursive, parentFolderId);  
             return ingestResult;
         }
+
 
         private async Task<IngestResult> IngestOneFolder(string path, bool recursive, string parentFolderId)
         {
@@ -47,7 +51,7 @@ namespace MyPhotoWebApi.Services
             var photos = new List<Photo>();
             var tags = path.Split('\\').Select(s => s.ToLowerInvariant()).ToArray();
             var name = tags.Last();
-            var currentFolder = await GetOrCreateFolder(path, name, parentFolderId);
+            var currentFolder = await _folderService.GetOrCreateFolder(path, name, parentFolderId);
 
             foreach (var fileInfo in contents)
             {
@@ -67,8 +71,8 @@ namespace MyPhotoWebApi.Services
                     Tags = tags
                 }; 
                 ingestResult.TotalFilesFound++;
-               
-                if (fileInfo.Name.EndsWith(".jpg") || fileInfo.Name.EndsWith(".jpeg") || fileInfo.Name.EndsWith(".png"))
+                var fileName = fileInfo.Name.ToLowerInvariant(); 
+                if (fileName.EndsWith(".jpg") || fileName.EndsWith(".jpeg") || fileName.EndsWith(".png"))
                 {
                     photo.MediaType = "photo";
                     var (dateTime, imageBytes) = GetDateTakenAndThumbnailFromImage(fileInfo.PhysicalPath);
@@ -76,13 +80,13 @@ namespace MyPhotoWebApi.Services
                     photo.Thumbnail = imageBytes;
                     ingestResult.PhotosFound++;
                 } 
-                else if (fileInfo.Name.EndsWith(".wav"))
+                else if (fileName.EndsWith(".wav"))
                 {
                     photo.MediaType = "sound";
                     photo.DateTaken = DateTime.Now;
                     ingestResult.SoundsFound++;
                 }
-                else if (fileInfo.Name.EndsWith(".avi") || fileInfo.Name.EndsWith(".mp4"))
+                else if (fileName.EndsWith(".avi") || fileName.EndsWith(".mp4"))
                 {
                     photo.MediaType = "video";
                     photo.DateTaken = DateTime.Now;
@@ -100,26 +104,11 @@ namespace MyPhotoWebApi.Services
 
             if (photos.Count > 0)
             {
-                await _photoCollection.InsertManyAsync(photos, new InsertManyOptions() { IsOrdered = false });
+                await _photoService.CreateManyPhotos(photos);
             }
            
             return ingestResult;
-        }
-
-        private async Task<Folder> GetOrCreateFolder(string path, string name, string parentFolderId)
-        { 
-            var currentFolder = await _folderCollection.Find(f => f.Path == path).FirstOrDefaultAsync();
-            if (currentFolder != null) return currentFolder;
-
-            currentFolder = new Folder()
-            {
-                Path = path,
-                Name = name,
-                ParentFolderId = parentFolderId 
-            };
-            await _folderCollection.InsertOneAsync(currentFolder); 
-            return currentFolder;
-        }
+        } 
 
         #region Image Processing
         private static readonly Regex r = new Regex(":");

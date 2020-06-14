@@ -86,7 +86,7 @@ namespace MyPhotoWebApi.Services
                     photo.DateTaken = DateTime.Now;
                     ingestResult.SoundsFound++;
                 }
-                else if (fileName.EndsWith(".avi") || fileName.EndsWith(".mp4"))
+                else if (fileName.EndsWith(".avi") || fileName.EndsWith(".mp4") || fileName.EndsWith(".3gp"))
                 {
                     photo.MediaType = "video";
                     photo.DateTaken = DateTime.Now;

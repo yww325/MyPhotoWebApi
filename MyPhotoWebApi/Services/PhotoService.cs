@@ -18,10 +18,19 @@ namespace MyPhotoWebApi.Services
             _logger = logger;
             _photosCollection = mongoDatabase.GetCollection<Photo>("photos");
         }
+
         public async Task<bool> MarkPrivate(string path, bool toPrivate)
         { 
             var update = Builders<Photo>.Update.Set(x => x.IsPrivate, toPrivate);
             var result = await _photosCollection.UpdateManyAsync(p=>p.Path.StartsWith(path), update);
+            _logger.LogInformation("updated records: " + result.ModifiedCount);
+            return true;
+        }
+
+        public async Task<bool> MarkPrivateById(string photoId, bool toPrivate)
+        {
+            var update = Builders<Photo>.Update.Set(x => x.IsPrivate, toPrivate);
+            var result = await _photosCollection.UpdateOneAsync(p => p.Id == photoId, update);
             _logger.LogInformation("updated records: " + result.ModifiedCount);
             return true;
         }

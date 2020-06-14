@@ -38,6 +38,7 @@ namespace MyPhotoWebApi.Controllers
 
         [HttpGet("validate")]
         [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public ActionResult Validate([FromQuery, Required, BindRequired]string userPass)
         {
             if (MD5Helper.MD5Hash(userPass) != Startup.HashedUserPass) return Unauthorized();
@@ -47,6 +48,7 @@ namespace MyPhotoWebApi.Controllers
         [HttpPatch("private")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public async Task<ActionResult> MarkPrivate([FromHeader, Required, BindRequired]string userPass, [Required, BindRequired]string path, bool toPrivate = true)
         {
             if (userPass != Startup.HashedUserPass) return Unauthorized();
@@ -54,6 +56,23 @@ namespace MyPhotoWebApi.Controllers
             if (ret)
             {
                 return Ok(path);
+            }
+            else
+            {
+                return BadRequest();
+            }
+        }
+
+        [HttpPatch("privateById")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<ActionResult> MarkPrivateById([FromHeader, Required, BindRequired]string userPass, [Required, BindRequired]string id, bool toPrivate = true)
+        {
+            if (userPass != Startup.HashedUserPass) return Unauthorized();
+            var ret = await _photoService.MarkPrivateById(id, toPrivate);
+            if (ret)
+            {
+                return Ok(id);
             }
             else
             {

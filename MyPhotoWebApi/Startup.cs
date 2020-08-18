@@ -153,7 +153,8 @@ namespace MyPhotoWebApi
         }
 
         private void RegisterMyServices(IServiceCollection services)
-        {  
+        {
+            services.AddSingleton<MyPhotoSettings, MyPhotoSettings>(sp => _myPhotoSettings);
             services.AddSingleton<IFileProvider, PhysicalFileProvider>(sp => _fileProvider);
             services.AddSingleton<FileIngestionService, FileIngestionService>();
             services.AddSingleton<PhotoService, PhotoService>();

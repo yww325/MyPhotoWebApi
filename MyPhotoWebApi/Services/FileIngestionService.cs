@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
-using MongoDB.Driver;
+using MyPhotoWebApi.Helpers;
 using MyPhotoWebApi.Models;
 using System;
 using System.Collections.Generic;
@@ -11,8 +11,6 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using MongoDB.Bson;
-using MongoDB.Driver.Core.Misc;
 
 namespace MyPhotoWebApi.Services
 {
@@ -32,11 +30,20 @@ namespace MyPhotoWebApi.Services
         }
 
         public async Task<IngestResult> Ingest(string ingestFolder, bool recursive)
-        { 
-            _logger.LogInformation($"Ingesting folder:{ingestFolder}, recursive={recursive}");
+        {  
             var folderIndex = ingestFolder.LastIndexOf("\\");
             var folderPath = folderIndex >=0 ? ingestFolder.Substring(0, folderIndex) : "";
             string parentFolderId = await _folderService.FindFolderIdByPath(folderPath);
+            _logger.LogInformation($"Start ingesting new folder:{ingestFolder}, recursive={recursive}");
+            if (parentFolderId == FolderService.fallbackParentFolderId)
+            {
+                _logger.LogInformation("No parent folder found, place new folder in root.");
+            } 
+            else
+            {
+                _logger.LogInformation("Found existing parent folder found.");
+            }
+
             var ingestResult = await IngestOneFolder(ingestFolder, recursive, parentFolderId);  
             return ingestResult;
         }
@@ -44,14 +51,15 @@ namespace MyPhotoWebApi.Services
 
         private async Task<IngestResult> IngestOneFolder(string path, bool recursive, string parentFolderId)
         {
+            _logger.LogInformation($"Ingesting folder:{path}, recursive={recursive}");
             var ingestResult = new IngestResult(); 
             var contents = _fileProvider.GetDirectoryContents(path);
             if (!contents.Exists) return ingestResult; //something wrong, folder not exists. 
 
             var photos = new List<Photo>();
-            var tags = path.Split('\\').Select(s => s.ToLowerInvariant()).ToArray();
+            var tags = Util.GenerateTags(path);
             var name = tags.Last();
-            var currentFolder = await _folderService.GetOrCreateFolder(path, name, parentFolderId);
+            var currentFolder = await _folderService.GetOrCreateFolderEntity(path, name, parentFolderId);
 
             foreach (var fileInfo in contents)
             {

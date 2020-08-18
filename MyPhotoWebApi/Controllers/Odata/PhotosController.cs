@@ -1,26 +1,22 @@
 ﻿using Microsoft.AspNet.OData;
 using Microsoft.AspNet.OData.Query;
-using Microsoft.AspNet.OData.Results;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
 using MyPhotoWebApi.Models;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
 
-namespace MyPhotoWebApi.Controllers
+namespace MyPhotoWebApi.Controllers.Odata
 {
     [ApiVersion("1.0")] // can be removed, default version  
     public class PhotosController : ODataController
-    {
-        private readonly ILogger<PhotosController> _logger;
+    { 
         private readonly IMongoCollection<Photo> _photosCollection;
 
-        public PhotosController(ILogger<PhotosController> logger, IMongoDatabase mongoDatabase)
+        public PhotosController(IMongoDatabase mongoDatabase)
         {
-            _logger = logger;
             _photosCollection = mongoDatabase.GetCollection<Photo>("photos");
         }
         // example Tags/any(s:contains(s, '重固'))

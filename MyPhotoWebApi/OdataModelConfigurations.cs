@@ -11,7 +11,7 @@ namespace MyPhotoWebApi
 {
     public class OdataModelConfigurations : IModelConfiguration
     { 
-        public void Apply(ODataModelBuilder builder, ApiVersion apiVersion, string? routePrefix)
+        public void Apply(ODataModelBuilder builder, ApiVersion apiVersion, string routePrefix)
         {
             builder.EntitySet<Photo>("Photos"); // must upper case first here in oData asp.net core, not matching MongoDB collection 'photos'.
             builder.EntityType<Photo>().HasKey(ai => ai.Id); // the call to HasKey is mandatory

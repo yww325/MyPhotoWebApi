@@ -20,6 +20,8 @@ using System.IO;
 using System.Linq;
 using Microsoft.OpenApi.Models;
 using sw= Microsoft.AspNetCore.Builder.SwaggerBuilderExtensions;
+using Microsoft.Extensions.Hosting;
+using Newtonsoft.Json.Serialization;
 
 namespace MyPhotoWebApi
 {
@@ -84,7 +86,7 @@ namespace MyPhotoWebApi
 
             services.AddSwaggerGen(c =>
             {
-                c.SwaggerDoc("v1", new OpenApiInfo { Title = "My API", Version = "v1" });
+                c.SwaggerDoc("v1", new OpenApiInfo { Title = "My Photo API", Version = "v1" });
             });
 
 
@@ -106,7 +108,7 @@ namespace MyPhotoWebApi
         } 
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
-        public void Configure(IApplicationBuilder app, IHostingEnvironment env, VersionedODataModelBuilder modelBuilder)
+        public void Configure(IApplicationBuilder app, IWebHostEnvironment env, VersionedODataModelBuilder modelBuilder)
         {  
             if (env.IsDevelopment())
             {
@@ -127,7 +129,7 @@ namespace MyPhotoWebApi
              sw.UseSwagger(app); 
              app.UseSwaggerUI(c =>
              {
-                 c.SwaggerEndpoint("/swagger/v1/swagger.json", "My API V1");
+                 c.SwaggerEndpoint("v1/swagger.json", "My Photo API V1");
              });
 
             app.UseCors("AllowAnyPolicy");
@@ -137,8 +139,8 @@ namespace MyPhotoWebApi
             {
                 endpoints.MapControllers();
                  endpoints.EnableDependencyInjection(); // https://devblogs.microsoft.com/odata/enabling-endpoint-routing-in-odata/
-                endpoints.Select().Filter().Expand().MaxTop(10);
-                //endpoints.MapODataRoute("odata", "odata/v{version:apiVersion}", GetEdmModel());
+                endpoints.Count().Select().Filter().Expand().MaxTop(100).OrderBy(); 
+                 endpoints.MapODataRoute("odata", "odata/v{version:apiVersion}", GetEdmModel());
             }); 
 
             app.UseStaticFiles(new StaticFileOptions()
@@ -151,6 +153,7 @@ namespace MyPhotoWebApi
         private IEdmModel GetEdmModel()
         {
             var builder = new ODataConventionModelBuilder();
+            builder.EnableLowerCamelCase();
             builder.EntitySet<Photo>("Photos"); // must upper case first here in oData asp.net core, not matching MongoDB collection 'photos'.
             builder.EntityType<Photo>().HasKey(ai => ai.Id); // the call to HasKey is mandatory
 
@@ -179,7 +182,10 @@ namespace MyPhotoWebApi
                 }).AddApiExplorer()
                 .AddFormatterMappings()
                 .AddDataAnnotations()
-                .AddNewtonsoftJson()
+                .AddNewtonsoftJson(options =>
+                {
+                    options.SerializerSettings.ContractResolver = new CamelCasePropertyNamesContractResolver();
+                })
                 .AddCors()
                 .SetCompatibilityVersion(CompatibilityVersion.Version_3_0); 
         }

@@ -1,4 +1,6 @@
-﻿using Microsoft.AspNet.OData;
+﻿using System;
+using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNet.OData;
 using Microsoft.AspNet.OData.Query;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -7,11 +9,32 @@ using MyPhotoWebApi.Models;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
+using NSwag.Annotations;
 
 namespace MyPhotoWebApi.Controllers.Odata
 {
-    [ApiVersion("1.0")] // can be removed, default version  
-    public class PhotosController : ODataController
+
+    public class HeaderModel {
+        [FromHeader]
+        [Required]
+        public string UserPass { get; set; }
+    }
+
+    [AttributeUsage(AttributeTargets.Parameter | AttributeTargets.Property, AllowMultiple = false, Inherited = true)]
+    public class FromHeaderModelAttribute : Attribute, IBindingSourceMetadata, IModelNameProvider
+    {
+        public BindingSource BindingSource => BindingSource.Query;
+
+        public string Name { get; set; }
+    }
+
+    //[Route("odata/v{version:apiVersion}/Photos")]
+    // [ApiExplorerSettings(IgnoreApi = false)]
+    [ApiController]
+    [Route("odata/v{version:apiVersion}/Photos")]
+    [ApiVersion("1.0")]
+    public class PhotosController : ControllerBase
     { 
         private readonly IMongoCollection<Photo> _photosCollection;
 
@@ -21,8 +44,9 @@ namespace MyPhotoWebApi.Controllers.Odata
         }
         // example Tags/any(s:contains(s, '重固'))
         // support null https://stackoverflow.com/questions/56962714/asp-net-core-odata-on-mongodb-like-filter
+        [HttpGet]
         [EnableQuery(HandleNullPropagation = HandleNullPropagationOption.False)]
-        public IQueryable<Photo> Get([FromHeader]string userPass)
+        public IQueryable<Photo> Get([FromHeader] string userPass)
         {
             IQueryable<Photo> queryable = _photosCollection.AsQueryable();
             if (userPass != Startup.HashedUserPass)
@@ -32,6 +56,8 @@ namespace MyPhotoWebApi.Controllers.Odata
             return queryable;
         }
 
+
+        [HttpPatch]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]

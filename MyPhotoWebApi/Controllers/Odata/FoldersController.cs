@@ -7,6 +7,8 @@ using System.Linq;
 
 namespace MyPhotoWebApi.Controllers.Odata
 {
+    [ApiController]
+    [Route("odata/v{version:apiVersion}/Folders")]
     [ApiVersion("1.0")] // can be removed, default version 
     public class FoldersController : ODataController
     {
@@ -16,7 +18,8 @@ namespace MyPhotoWebApi.Controllers.Odata
         {
             _mongoCollection = mongoDatabase.GetCollection<Folder>("folders"); ;
         }
-       
+
+        [HttpGet]
         [EnableQuery(HandleNullPropagation = HandleNullPropagationOption.False)] 
         public IQueryable<Folder> Get()
         {

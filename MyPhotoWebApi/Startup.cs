@@ -104,7 +104,8 @@ namespace MyPhotoWebApi
                 }); 
             });
             AddMvcCoreWithSetOdataFormatters(services);
-            RegisterMyServices(services);  
+            RegisterMyServices(services);
+            services.AddScoped<ValidateModelAttribute>();
         } 
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.

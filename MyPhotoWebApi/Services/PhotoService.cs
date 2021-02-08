@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Identity;
+﻿using Microsoft.AspNet.OData;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Logging;
 using MongoDB.Driver;
 using MyPhotoWebApi.Helpers;
@@ -33,6 +34,33 @@ namespace MyPhotoWebApi.Services
             var result = await _photosCollection.UpdateManyAsync(p=>p.Path == path, update);
             _logger.LogInformation("updated records: " + result.ModifiedCount);
             return true;
+        }
+
+        internal IQueryable<Photo> GetPhotosQueryable(string userPass)
+        {
+            IQueryable<Photo> queryable = _photosCollection.AsQueryable();
+            if (userPass != Startup.HashedUserPass)
+            {
+                queryable = queryable.Where(f => f.IsPrivate == false);
+            }
+            return queryable;
+        }
+
+        internal async Task<string> Patch(string userPass, string key, Delta<Photo> delta)
+        {
+            if (userPass != Startup.HashedUserPass) throw new MyPhotoException("You need a correct password to patch.", MyErrorCode.BadRequest);
+
+            var entity = await _photosCollection.Find(p => p.Id == key).FirstOrDefaultAsync();
+            if (entity == null) throw new MyPhotoException($"Photo {key} is not found.", MyErrorCode.NotFound);
+
+            delta.Patch(entity);
+            var replaceResult = _photosCollection.ReplaceOne(p => p.Id == key, entity);
+            if (!replaceResult.IsAcknowledged)
+            {
+                throw new MyPhotoException(replaceResult.ToString(), MyErrorCode.General); 
+            }
+
+            return $"Photo {key} is patched successully.";
         }
 
         public async Task<bool> MarkPrivateById(string photoId, bool toPrivate)

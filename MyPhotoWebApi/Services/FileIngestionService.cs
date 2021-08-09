@@ -60,6 +60,8 @@ namespace MyPhotoWebApi.Services
             var tags = Util.GenerateTags(path);
             var name = tags.Last();
             var currentFolder = await _folderService.GetOrCreateFolderEntity(path, name, parentFolderId);
+            var existingPhotoeNames = _photoService.GetPhotosQueryable(Startup.HashedUserPass)
+                .Where(p => p.Path == path).Select(p=>p.FileName).ToHashSet();
 
             foreach (var fileInfo in contents)
             {
@@ -72,6 +74,11 @@ namespace MyPhotoWebApi.Services
                     } 
                     continue;
                 } 
+
+                if (existingPhotoeNames.Contains(fileInfo.Name))
+                {
+                    continue;  //no need to add existing file
+                }
                 var photo = new Photo()
                 {
                     FileName = fileInfo.Name, 

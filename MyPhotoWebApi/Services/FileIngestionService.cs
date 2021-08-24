@@ -30,8 +30,12 @@ namespace MyPhotoWebApi.Services
         }
 
         public async Task<IngestResult> Ingest(string ingestFolder, bool recursive)
-        {  
-            var folderIndex = ingestFolder.LastIndexOf("\\");
+        {
+            ingestFolder = ingestFolder.Replace('/', '\\');
+            ingestFolder = ingestFolder.TrimStart('\\');
+            ingestFolder = ingestFolder.TrimEnd('\\');
+
+            var folderIndex = ingestFolder.IndexOf('\\');
             var folderPath = folderIndex >=0 ? ingestFolder.Substring(0, folderIndex) : "";
             string parentFolderId = await _folderService.FindFolderIdByPath(folderPath);
             _logger.LogInformation($"Start ingesting new folder:{ingestFolder}, recursive={recursive}");
@@ -41,7 +45,7 @@ namespace MyPhotoWebApi.Services
             } 
             else
             {
-                _logger.LogInformation("Found existing parent folder found.");
+                _logger.LogInformation($"Found existing parent folder {folderPath}.");
             }
 
             var ingestResult = await IngestOneFolder(ingestFolder, recursive, parentFolderId);  

@@ -24,6 +24,8 @@ using Microsoft.Extensions.Hosting;
 using Newtonsoft.Json.Serialization;
 using System;
 using System.Text;
+using Swashbuckle.AspNetCore.SwaggerGen;
+using Microsoft.Extensions.Options;
 
 namespace MyPhotoWebApi
 {
@@ -89,8 +91,8 @@ namespace MyPhotoWebApi
 
             services.AddSwaggerGen(c =>
             {
-                c.SwaggerDoc("v1", new OpenApiInfo { Title = "My Photo API", Version = "v1" });
-            });
+               //  c.SwaggerDoc("v1", new OpenApiInfo { Title = "My Photo API", Version = "v1" });
+            }).AddTransient<IConfigureOptions<SwaggerGenOptions>, MySwaggerConfigOptions>();
 
 
             // Add OpenAPI/Swagger document 
@@ -133,6 +135,7 @@ namespace MyPhotoWebApi
              sw.UseSwagger(app); 
              app.UseSwaggerUI(c =>
              {
+                 // this can also be put inside a option class' Configure method.
                  c.SwaggerEndpoint("v1/swagger.json", "My Photo API V1");
              });
 

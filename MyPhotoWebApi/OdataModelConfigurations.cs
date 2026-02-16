@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNet.OData.Builder;
+﻿using Microsoft.AspNetCore.OData;
+using Microsoft.OData.ModelBuilder;
 using Microsoft.AspNetCore.Mvc;
 using MyPhotoWebApi.Models;
 using System;
@@ -9,12 +10,12 @@ using System.Threading.Tasks;
 
 namespace MyPhotoWebApi
 {
-    public class OdataModelConfigurations : IModelConfiguration
+    public class OdataModelConfigurations
     { 
-        public void Apply(ODataModelBuilder builder, ApiVersion apiVersion, string routePrefix)
+        public void Apply(ODataModelBuilder builder)
         {
-            builder.EntitySet<Photo>("Photos"); // must upper case first here in oData asp.net core, not matching MongoDB collection 'photos'.
-            builder.EntityType<Photo>().HasKey(ai => ai.Id); // the call to HasKey is mandatory
+            builder.EntitySet<Photo>("Photos");
+            builder.EntityType<Photo>().HasKey(ai => ai.Id);
 
             builder.EntitySet<Folder>("Folders");
             builder.EntityType<Folder>().HasKey(ai => ai.Id);

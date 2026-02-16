@@ -36,6 +36,16 @@ namespace MyPhotoWebApi.Controllers.API
             {
                 return StatusCode((int)HttpStatusCode.InternalServerError, "folder creation failed");
             } 
-        } 
+        }
+
+        [HttpDelete]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        public async Task<IActionResult> DeleteFolderData([FromHeader, Required, BindRequired] string userPass, [FromQuery, Required, BindRequired] string folderPath)
+        {
+            if (userPass != Startup.HashedUserPass) return Unauthorized();
+            var result = await _folderService.DeleteFolderData(folderPath);
+            return Ok(result);
+        }
     }
 }

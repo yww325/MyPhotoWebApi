@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNet.OData;
+﻿using Microsoft.AspNetCore.OData;
+using Microsoft.AspNetCore.OData.Deltas;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Logging;
 using MongoDB.Driver;

@@ -26,7 +26,7 @@ namespace MyPhotoWebApi.Models
         public string[] Tags { get; set; }
 
         [BsonElement("thumbnail")]
-        public Byte[] Thumbnail { get; set; } 
+        public byte[]? Thumbnail { get; set; } 
         
         [BsonElement("private")]
         public bool IsPrivate { get; set; }

@@ -1,6 +1,6 @@
-﻿using Microsoft.AspNet.OData.Builder;
-using Microsoft.AspNet.OData.Extensions;
-using Microsoft.AspNet.OData.Formatter;
+using Microsoft.AspNetCore.OData;
+using Microsoft.OData.ModelBuilder;
+using Microsoft.AspNetCore.Mvc.Versioning;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -19,13 +19,13 @@ using MyPhotoWebApi.Services;
 using System.IO;
 using System.Linq;
 using Microsoft.OpenApi.Models;
-using sw= Microsoft.AspNetCore.Builder.SwaggerBuilderExtensions;
 using Microsoft.Extensions.Hosting;
 using Newtonsoft.Json.Serialization;
 using System;
 using System.Text;
 using Swashbuckle.AspNetCore.SwaggerGen;
 using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.Mvc.ApiExplorer;
 
 namespace MyPhotoWebApi
 {
@@ -38,7 +38,7 @@ namespace MyPhotoWebApi
             _myPhotoSettings = new MyPhotoSettings();
             Configuration.GetSection(nameof(MyPhotoSettings)).Bind(_myPhotoSettings);
             _fileProvider = new PhysicalFileProvider(_myPhotoSettings.RootFolder);
-            var unHashedUserPass = File.ReadAllText(_myPhotoSettings.UserPassLocation);
+            var unHashedUserPass = File.ReadAllText(_myPhotoSettings.UserPassLocation).Trim();
             HashedUserPass = MD5Helper.MD5Hash(unHashedUserPass); 
         }
 
@@ -65,34 +65,26 @@ namespace MyPhotoWebApi
 
             //services.AddMvc(options => options.EnableEndpointRouting = false)  // we only need controller
             services.AddControllers().AddNewtonsoftJson()
-                .SetCompatibilityVersion(CompatibilityVersion.Version_3_0); 
+                .AddOData(options => options.Select().Filter().OrderBy().Expand().Count().SetMaxTop(null)
+                    .AddRouteComponents("odata/v1", GetEdmModel()));
 
             services.AddApiVersioning(o =>
             {
-                o.AssumeDefaultVersionWhenUnspecified = true;
                 o.DefaultApiVersion = new ApiVersion(1, 0);
             });
             services.AddVersionedApiExplorer(o =>
             {
-                o.AssumeDefaultVersionWhenUnspecified = true;
+                o.GroupNameFormat = "'v'VVV"; // 这样就会生成 v1, v1.1 等格式的 GroupName
                 o.SubstituteApiVersionInUrl = true;
-                o.GroupNameFormat = "'v'V";
             });
 
        
-            services.AddOData().EnableApiVersioning();
-            services.AddODataApiExplorer(o =>
-            {
-                o.AssumeDefaultVersionWhenUnspecified = true;
-                o.SubstituteApiVersionInUrl = true;
-                o.GroupNameFormat = "'v'V";
-            });
+            // services.AddODataApiExplorer(o =>
+            // {
+            // });
 
 
-            services.AddSwaggerGen(c =>
-            {
-               //  c.SwaggerDoc("v1", new OpenApiInfo { Title = "My Photo API", Version = "v1" });
-            }).AddTransient<IConfigureOptions<SwaggerGenOptions>, MySwaggerConfigOptions>();
+            services.AddOpenApiDocument();
 
 
             // Add OpenAPI/Swagger document 
@@ -108,13 +100,13 @@ namespace MyPhotoWebApi
                     options.AllowAnyMethod();
                 }); 
             });
-            AddMvcCoreWithSetOdataFormatters(services);
+            // AddMvcCoreWithSetOdataFormatters(services); // Removed for OData 8.x compatibility
             RegisterMyServices(services);
             services.AddScoped<ValidateModelAttribute>();
         } 
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
-        public void Configure(IApplicationBuilder app, IWebHostEnvironment env, VersionedODataModelBuilder modelBuilder)
+        public void Configure(IApplicationBuilder app, IWebHostEnvironment env, IApiVersionDescriptionProvider provider)
         {  
             if (env.IsDevelopment())
             {
@@ -126,17 +118,16 @@ namespace MyPhotoWebApi
                 app.UseHsts();
             }
             
-            app.UseHttpsRedirection();
+            // app.UseHttpsRedirection();
 
             // Enable middleware to serve generated Swagger as a JSON endpoint.
             //https://github.com/RicoSuter/NSwag/wiki/AspNetCore-Middleware
             //app.UseOpenApi();//from NSwag to replace useSwagger()
             //app.UseSwaggerUi3();  //replace UseSwaggerUI()
-             sw.UseSwagger(app); 
-             app.UseSwaggerUI(c =>
+             app.UseOpenApi();
+             app.UseSwaggerUi(c =>
              {
-                 // this can also be put inside a option class' Configure method.
-                 c.SwaggerEndpoint("v1/swagger.json", "My Photo API V1");
+                 c.Path = "/swagger";
              });
 
             app.UseCors("AllowAnyPolicy");
@@ -145,9 +136,7 @@ namespace MyPhotoWebApi
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapControllers();
-                 endpoints.EnableDependencyInjection(); // https://devblogs.microsoft.com/odata/enabling-endpoint-routing-in-odata/
-                endpoints.Count().Select().Filter().Expand().MaxTop(100).OrderBy(); 
-                 endpoints.MapODataRoute("odata", "odata/v{version:apiVersion}", GetEdmModel());
+                // OData 8.x configuration simplified
             }); 
 
             app.UseStaticFiles(new StaticFileOptions()
@@ -161,40 +150,10 @@ namespace MyPhotoWebApi
         {
             var builder = new ODataConventionModelBuilder();
             builder.EnableLowerCamelCase();
-            builder.EntitySet<Photo>("Photos"); // must upper case first here in oData asp.net core, not matching MongoDB collection 'photos'.
-            builder.EntityType<Photo>().HasKey(ai => ai.Id); // the call to HasKey is mandatory
-
+            var photos = builder.EntitySet<Photo>("Photos");
+            photos.EntityType.Property(p => p.Thumbnail).IsNullable();
             builder.EntitySet<Folder>("Folders");
-            builder.EntityType<Folder>().HasKey(ai => ai.Id);
             return builder.GetEdmModel();
-        }
-
-        private static void AddMvcCoreWithSetOdataFormatters(IServiceCollection services)
-        {
-            services.AddMvcCore(options =>
-                {
-                    foreach (var outputFormatter in options.OutputFormatters.OfType<ODataOutputFormatter>()
-                        .Where(_ => _.SupportedMediaTypes.Count == 0))
-                    {
-                        outputFormatter.SupportedMediaTypes.Add(
-                            new MediaTypeHeaderValue("application/prs.odatatestxx-odata"));
-                    }
-
-                    foreach (var inputFormatter in options.InputFormatters.OfType<ODataInputFormatter>()
-                        .Where(_ => _.SupportedMediaTypes.Count == 0))
-                    {
-                        inputFormatter.SupportedMediaTypes.Add(
-                            new MediaTypeHeaderValue("application/prs.odatatestxx-odata"));
-                    }
-                }).AddApiExplorer()
-                .AddFormatterMappings()
-                .AddDataAnnotations()
-                .AddNewtonsoftJson(options =>
-                {
-                    options.SerializerSettings.ContractResolver = new CamelCasePropertyNamesContractResolver();
-                })
-                .AddCors()
-                .SetCompatibilityVersion(CompatibilityVersion.Version_3_0); 
         }
 
         private void RegisterMyServices(IServiceCollection services)

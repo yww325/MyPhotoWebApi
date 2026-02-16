@@ -20,11 +20,55 @@ namespace MyPhotoWebApi.Services
         private readonly MyPhotoSettings _myPhotoSettings;
         private readonly IMongoCollection<Folder> _foldersCollection;
 
+        private readonly IMongoCollection<Photo> _photosCollection;
+
         public FolderService(ILogger<FolderService> logger, IMongoDatabase mongoDatabase, MyPhotoSettings myPhotoSettings)
         {
             _logger = logger;
             _myPhotoSettings = myPhotoSettings;
             _foldersCollection = mongoDatabase.GetCollection<Folder>("folders");
+            _photosCollection = mongoDatabase.GetCollection<Photo>("photos");
+        }
+
+        public async Task<object> DeleteFolderData(string folderPath)
+        {
+            folderPath = folderPath.Replace('\\', '/').Trim('/');
+            _logger.LogInformation($"Deleting all data for folder branch: {folderPath}");
+
+            // Find all folders in this branch (self + subfolders)
+            // Path should be equal to folderPath or start with folderPath + "/"
+            var folderFilter = Builders<Folder>.Filter.Where(f => f.Path == folderPath || f.Path.StartsWith(folderPath + "/"));
+            var deletedFolders = await _foldersCollection.Find(folderFilter).ToListAsync();
+
+            // Find all photos in this branch
+            var photoFilter = Builders<Photo>.Filter.Where(p => p.Path == folderPath || p.Path.StartsWith(folderPath + "/"));
+            var photos = await _photosCollection.Find(photoFilter).ToListAsync();
+
+            // Redact thumbnails for the return value
+            var deletedPhotos = photos.Select(p => new {
+                p.Id,
+                p.FileName,
+                p.MediaType,
+                p.Path,
+                p.DateTaken,
+                p.Tags,
+                Thumbnail = p.Thumbnail != null ? "..." : null,
+                p.IsPrivate
+            }).ToList();
+
+            // Perform deletion
+            var folderDeleteResult = await _foldersCollection.DeleteManyAsync(folderFilter);
+            var photoDeleteResult = await _photosCollection.DeleteManyAsync(photoFilter);
+
+            _logger.LogInformation($"Deleted {folderDeleteResult.DeletedCount} folders and {photoDeleteResult.DeletedCount} photos.");
+
+            return new
+            {
+                folderPath,
+                deletedFolders,
+                deletedPhotos,
+                summary = $"Deleted {folderDeleteResult.DeletedCount} folders and {photoDeleteResult.DeletedCount} photos."
+            };
         }
 
 

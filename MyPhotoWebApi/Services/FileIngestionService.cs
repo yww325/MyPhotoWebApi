@@ -4,13 +4,15 @@ using MyPhotoWebApi.Helpers;
 using MyPhotoWebApi.Models;
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Processing;
+using MetadataExtractor;
+using MetadataExtractor.Formats.Exif;
 
 namespace MyPhotoWebApi.Services
 {
@@ -31,11 +33,11 @@ namespace MyPhotoWebApi.Services
 
         public async Task<IngestResult> Ingest(string ingestFolder, bool recursive)
         {
-            ingestFolder = ingestFolder.Replace('/', '\\');
-            ingestFolder = ingestFolder.TrimStart('\\');
-            ingestFolder = ingestFolder.TrimEnd('\\');
+            ingestFolder = ingestFolder.Replace('\\', '/');
+            ingestFolder = ingestFolder.TrimStart('/');
+            ingestFolder = ingestFolder.TrimEnd('/');
 
-            var folderIndex = ingestFolder.IndexOf('\\');
+            var folderIndex = ingestFolder.IndexOf('/');
             var folderPath = folderIndex >=0 ? ingestFolder.Substring(0, folderIndex) : "";
             string parentFolderId = await _folderService.FindFolderIdByPath(folderPath);
             _logger.LogInformation($"Start ingesting new folder:{ingestFolder}, recursive={recursive}");
@@ -73,7 +75,8 @@ namespace MyPhotoWebApi.Services
                 {
                     if (recursive)
                     {
-                        var subFolderResult = await IngestOneFolder(path + "\\" + fileInfo.Name, true, currentFolder.Id);
+                        var subPath = string.IsNullOrEmpty(path) ? fileInfo.Name : path + "/" + fileInfo.Name;
+                        var subFolderResult = await IngestOneFolder(subPath, true, currentFolder.Id);
                         ingestResult.Absorb(subFolderResult);
                     } 
                     continue;
@@ -91,7 +94,7 @@ namespace MyPhotoWebApi.Services
                 }; 
                 ingestResult.TotalFilesFound++;
                 var fileName = fileInfo.Name.ToLowerInvariant(); 
-                if (fileName.EndsWith(".jpg") || fileName.EndsWith(".jpeg") || fileName.EndsWith(".png"))
+                if (fileName.EndsWith(".jpg") || fileName.EndsWith(".jpeg") || fileName.EndsWith(".png") || fileName.EndsWith(".bmp"))
                 {
                     photo.MediaType = "photo";
                     var (dateTime, imageBytes) = GetDateTakenAndThumbnailFromImage(fileInfo.PhysicalPath);
@@ -130,64 +133,39 @@ namespace MyPhotoWebApi.Services
         } 
 
         #region Image Processing
-        private static readonly Regex r = new Regex(":");
         private const int ThumbnailLongSide = 240;
-        private static readonly ImageCodecInfo myImageCodecInfo = GetEncoderInfo("image/jpeg");
-        private static readonly EncoderParameters myEncoderParameters = GetEncoderParameters();
 
         private Tuple<DateTime, byte[]> GetDateTakenAndThumbnailFromImage(string path)
         {
-            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
-            using (Image myImage = Image.FromStream(fs, false, false))
+            DateTime dateTaken = DateTime.Now;
+            try
             {
-                // https://stackoverflow.com/questions/180030/how-can-i-find-out-when-a-picture-was-actually-taken-in-c-sharp-running-on-vista
-                DateTime dateTaken = DateTime.Now;
-                try
+                var directories = ImageMetadataReader.ReadMetadata(path);
+                var subIfdDirectory = directories.OfType<ExifSubIfdDirectory>().FirstOrDefault();
+                if (subIfdDirectory != null && subIfdDirectory.TryGetDateTime(ExifDirectoryBase.TagDateTimeOriginal, out var dateTime))
                 {
-                    PropertyItem propItem = myImage.GetPropertyItem(36867);
-                    string dateTakenStr = r.Replace(Encoding.UTF8.GetString(propItem.Value), "-", 2);
-                    DateTime.TryParse(dateTakenStr, out dateTaken);
-                }
-                catch (Exception)
-                {
-                    _logger.LogWarning($"image file {path} can't load dateTaken ");
-                }
-              
-                var ratio = (double)myImage.Width / myImage.Height;
-                var width = ratio > 1 ? ThumbnailLongSide : ThumbnailLongSide * ratio;
-                var height = ratio < 1 ? ThumbnailLongSide : ThumbnailLongSide / ratio;
-                var thumb = myImage.GetThumbnailImage((int)width, (int)height, () => false, IntPtr.Zero);
-                using (MemoryStream m = new MemoryStream())
-                {
-                    // https://docs.microsoft.com/en-us/dotnet/api/system.drawing.image.save?view=netframework-4.8
-                    // https://www.c-sharpcorner.com/blogs/convert-an-image-to-base64-string-and-base64-string-to-image 
-                    thumb.Save(m, myImageCodecInfo, myEncoderParameters);
-                    byte[] imageBytes = m.ToArray();
-                    return new Tuple<DateTime, byte[]>(dateTaken, imageBytes);
+                    dateTaken = dateTime;
                 }
             }
-        }
-
-        private static EncoderParameters GetEncoderParameters()
-        {
-            var myEncoder = System.Drawing.Imaging.Encoder.Quality;
-            var myEncoderParameters = new EncoderParameters(1);
-            var myEncoderParameter = new EncoderParameter(myEncoder, 50L);
-            myEncoderParameters.Param[0] = myEncoderParameter;
-            return myEncoderParameters;
-        }
-
-        private static ImageCodecInfo GetEncoderInfo(String mimeType)
-        {
-            int j;
-            ImageCodecInfo[] encoders;
-            encoders = ImageCodecInfo.GetImageEncoders();
-            for (j = 0; j < encoders.Length; ++j)
+            catch (Exception)
             {
-                if (encoders[j].MimeType == mimeType)
-                    return encoders[j];
+                _logger.LogWarning($"image file {path} can't load dateTaken ");
             }
-            return null;
+
+            using (var image = SixLabors.ImageSharp.Image.Load(path))
+            {
+                image.Mutate(x => x.Resize(new ResizeOptions
+                {
+                    Size = new Size(ThumbnailLongSide, ThumbnailLongSide),
+                    Mode = ResizeMode.Max
+                }));
+
+                using (var ms = new MemoryStream())
+                {
+                    image.SaveAsJpeg(ms);
+                    return new Tuple<DateTime, byte[]>(dateTaken, ms.ToArray());
+                }
+            }
         }
         #endregion 
     }

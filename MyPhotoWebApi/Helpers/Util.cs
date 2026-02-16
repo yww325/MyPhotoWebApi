@@ -11,7 +11,7 @@ namespace MyPhotoWebApi.Helpers
     {
         public static string[] GenerateTags(string path)
         {
-            return path.Split('\\').Select(s => s.ToLowerInvariant()).ToArray();
+            return path.Split(new[] { '\\', '/' }, StringSplitOptions.RemoveEmptyEntries).Select(s => s.ToLowerInvariant()).ToArray();
         }
 
         public static async Task<IActionResult> ResponseHelper<T>(Func<Task<T>> serviceCall)

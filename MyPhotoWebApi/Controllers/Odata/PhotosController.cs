@@ -1,5 +1,6 @@
-﻿using Microsoft.AspNet.OData;
-using Microsoft.AspNet.OData.Query;
+﻿using Microsoft.AspNetCore.OData.Deltas;
+using Microsoft.AspNetCore.OData.Query;
+using Microsoft.AspNetCore.OData.Routing.Controllers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
@@ -13,11 +14,7 @@ using System.Threading.Tasks;
 
 namespace MyPhotoWebApi.Controllers.Odata
 {
-    // [ApiExplorerSettings(IgnoreApi = false)]
-    [ApiController]
-    [Route("odata/v{version:apiVersion}/Photos")]
-    [ApiVersion("1.0")]
-    public class PhotosController : ControllerBase
+    public class PhotosController : ODataController
     {
         private readonly PhotoService _photoService;
 
@@ -29,7 +26,7 @@ namespace MyPhotoWebApi.Controllers.Odata
         // example Tags/any(s:contains(s, '重固'))
         // support null https://stackoverflow.com/questions/56962714/asp-net-core-odata-on-mongodb-like-filter
         [HttpGet]
-        [EnableQuery(HandleNullPropagation = HandleNullPropagationOption.False)]
+        [EnableQuery]
         public IQueryable<Photo> Get([FromHeader] string userPass)
         {
           return _photoService.GetPhotosQueryable(userPass);

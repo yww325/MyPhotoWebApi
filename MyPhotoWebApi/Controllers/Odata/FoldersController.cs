@@ -1,5 +1,5 @@
-﻿using Microsoft.AspNet.OData;
-using Microsoft.AspNet.OData.Query;
+﻿using Microsoft.AspNetCore.OData.Routing.Controllers;
+using Microsoft.AspNetCore.OData.Query;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using MyPhotoWebApi.Models;
@@ -7,9 +7,6 @@ using System.Linq;
 
 namespace MyPhotoWebApi.Controllers.Odata
 {
-    [ApiController]
-    [Route("odata/v{version:apiVersion}/Folders")]
-    [ApiVersion("1.0")] // can be removed, default version 
     public class FoldersController : ODataController
     {
         private readonly IMongoCollection<Folder> _mongoCollection;
@@ -20,7 +17,7 @@ namespace MyPhotoWebApi.Controllers.Odata
         }
 
         [HttpGet]
-        [EnableQuery(HandleNullPropagation = HandleNullPropagationOption.False)] 
+        [EnableQuery] 
         public IQueryable<Folder> Get()
         {
             return _mongoCollection.AsQueryable();

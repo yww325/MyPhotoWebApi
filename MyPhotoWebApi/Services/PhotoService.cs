@@ -105,6 +105,34 @@ namespace MyPhotoWebApi.Services
             await _photosCollection.BulkWriteAsync(models, new BulkWriteOptions { IsOrdered = false });
         }
 
+        public async Task<List<Photo>> GetThumbPage(string userPass, string pathPrefix, int top, int skip)
+        {
+            // Dedicated endpoint path: avoids OData $select projection, which doesn't translate through Mongo LINQ.
+            if (top <= 0) top = 100;
+            if (top > 500) top = 500; // safety cap
+            if (skip < 0) skip = 0;
+            pathPrefix ??= string.Empty;
+
+            var filter = Builders<Photo>.Filter.Regex(x => x.Path, new MongoDB.Bson.BsonRegularExpression("^" + System.Text.RegularExpressions.Regex.Escape(pathPrefix)));
+            if (userPass != Startup.HashedUserPass)
+            {
+                filter &= Builders<Photo>.Filter.Eq(x => x.IsPrivate, false);
+            }
+
+            // Only return fields needed for the grid.
+            var projection = Builders<Photo>.Projection
+                .Include(x => x.Id)
+                .Include(x => x.FileName)
+                .Include(x => x.MediaType)
+                .Include(x => x.Path)
+                .Include(x => x.DateTaken)
+                .Include(x => x.Thumbnail)
+                .Include(x => x.IsPrivate);
+
+            var sort = Builders<Photo>.Sort.Descending(x => x.DateTaken);
+            return await _photosCollection.Find(filter).Project<Photo>(projection).Sort(sort).Skip(skip).Limit(top).ToListAsync();
+        }
+
         public async Task<bool> MovePhotos(string[] ids, string folderId)
         {
             try

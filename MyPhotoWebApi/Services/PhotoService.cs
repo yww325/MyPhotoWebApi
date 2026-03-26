@@ -75,7 +75,34 @@ namespace MyPhotoWebApi.Services
 
         public async Task CreateManyPhotos(IList<Photo> photos)
         {
-            await _photosCollection.InsertManyAsync(photos, new InsertManyOptions() { IsOrdered = false });
+            // Root-cause fix for duplicate rows:
+            // ingestion can run concurrently, and the pre-check in FileIngestionService is not atomic with inserts.
+            // Use upserts keyed by (Path, FileName) so repeated ingests do not create duplicates.
+            var models = new List<WriteModel<Photo>>(photos.Count);
+            foreach (var p in photos)
+            {
+                var path = p.Path ?? string.Empty;
+                var fileName = p.FileName ?? string.Empty;
+
+                var filter = Builders<Photo>.Filter.Eq(x => x.Path, path) &
+                             Builders<Photo>.Filter.Eq(x => x.FileName, fileName);
+
+                // If the doc already exists, keep it (no-op). If it doesn't, insert.
+                // We intentionally avoid overwriting existing docs here.
+                var update = Builders<Photo>.Update
+                    .SetOnInsert(x => x.Path, path)
+                    .SetOnInsert(x => x.FileName, fileName)
+                    .SetOnInsert(x => x.MediaType, p.MediaType)
+                    .SetOnInsert(x => x.DateTaken, p.DateTaken)
+                    .SetOnInsert(x => x.Tags, p.Tags)
+                    .SetOnInsert(x => x.Thumbnail, p.Thumbnail)
+                    .SetOnInsert(x => x.IsPrivate, p.IsPrivate);
+
+                models.Add(new UpdateOneModel<Photo>(filter, update) { IsUpsert = true });
+            }
+
+            if (models.Count == 0) return;
+            await _photosCollection.BulkWriteAsync(models, new BulkWriteOptions { IsOrdered = false });
         }
 
         public async Task<bool> MovePhotos(string[] ids, string folderId)

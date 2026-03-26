@@ -5,6 +5,8 @@ using MyPhotoWebApi.Services;
 using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Threading.Tasks;
+using System.Collections.Generic;
+using MyPhotoWebApi.Models;
 
 namespace MyPhotoWebApi.Controllers.API
 {
@@ -78,6 +80,20 @@ namespace MyPhotoWebApi.Controllers.API
             {
                 return StatusCode((int)HttpStatusCode.InternalServerError, "Move photo failed");
             }
+        }
+
+        [HttpGet("thumbs")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        public async Task<ActionResult<List<Photo>>> GetThumbs(
+            [FromHeader, Required, BindRequired] string userPass,
+            [Required, BindRequired] string pathPrefix,
+            int top = 100,
+            int skip = 0)
+        {
+            // We do NOT use OData $select here because it triggers Mongo LINQ translation errors.
+            var photos = await _photoService.GetThumbPage(userPass, pathPrefix, top, skip);
+            return Ok(photos);
         }
 
     }

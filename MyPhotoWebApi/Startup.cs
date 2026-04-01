@@ -37,6 +37,25 @@ namespace MyPhotoWebApi
             Configuration = configuration;
             _myPhotoSettings = new MyPhotoSettings();
             Configuration.GetSection(nameof(MyPhotoSettings)).Bind(_myPhotoSettings);
+
+            // Guardrails: fail fast with actionable error if configuration is missing.
+            if (string.IsNullOrWhiteSpace(_myPhotoSettings.RootFolder) || !Path.IsPathRooted(_myPhotoSettings.RootFolder))
+            {
+                throw new InvalidOperationException(
+                    $"MyPhotoSettings.RootFolder is missing or not an absolute path. " +
+                    $"Value='{_myPhotoSettings.RootFolder ?? ""}'. " +
+                    $"Check appsettings.json / environment overrides and the process WorkingDirectory/ContentRoot. " +
+                    $"CurrentDirectory='{Directory.GetCurrentDirectory()}', ASPNETCORE_ENVIRONMENT='{Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")}'.");
+            }
+            if (string.IsNullOrWhiteSpace(_myPhotoSettings.UserPassLocation) || !Path.IsPathRooted(_myPhotoSettings.UserPassLocation))
+            {
+                throw new InvalidOperationException(
+                    $"MyPhotoSettings.UserPassLocation is missing or not an absolute path. " +
+                    $"Value='{_myPhotoSettings.UserPassLocation ?? ""}'. " +
+                    $"Check appsettings.json / environment overrides and the process WorkingDirectory/ContentRoot. " +
+                    $"CurrentDirectory='{Directory.GetCurrentDirectory()}', ASPNETCORE_ENVIRONMENT='{Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")}'.");
+            }
+
             _fileProvider = new PhysicalFileProvider(_myPhotoSettings.RootFolder);
             var unHashedUserPass = File.ReadAllText(_myPhotoSettings.UserPassLocation).Trim();
             HashedUserPass = MD5Helper.MD5Hash(unHashedUserPass); 

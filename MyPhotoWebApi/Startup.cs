@@ -90,6 +90,9 @@ namespace MyPhotoWebApi
             services.AddApiVersioning(o =>
             {
                 o.DefaultApiVersion = new ApiVersion(1, 0);
+                // Let non-versioned endpoints (e.g. /health) work without requiring api-version.
+                o.AssumeDefaultVersionWhenUnspecified = true;
+                o.ReportApiVersions = true;
             });
             services.AddVersionedApiExplorer(o =>
             {

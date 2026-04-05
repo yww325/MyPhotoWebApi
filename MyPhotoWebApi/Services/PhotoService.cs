@@ -113,7 +113,8 @@ namespace MyPhotoWebApi.Services
             if (skip < 0) skip = 0;
             pathPrefix ??= string.Empty;
 
-            var filter = Builders<Photo>.Filter.Regex(x => x.Path, new MongoDB.Bson.BsonRegularExpression("^" + System.Text.RegularExpressions.Regex.Escape(pathPrefix)));
+            // Exact match: list ONLY the current folder (non-recursive)
+            var filter = Builders<Photo>.Filter.Eq(x => x.Path, pathPrefix);
             if (userPass != Startup.HashedUserPass)
             {
                 filter &= Builders<Photo>.Filter.Eq(x => x.IsPrivate, false);

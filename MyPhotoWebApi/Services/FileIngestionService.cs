@@ -90,7 +90,6 @@ namespace MyPhotoWebApi.Services
                 {
                     FileName = fileInfo.Name, 
                     Path = path,
-                    FolderId = currentFolder.Id,
                     Tags = tags
                 }; 
                 ingestResult.TotalFilesFound++;

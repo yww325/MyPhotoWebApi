@@ -92,7 +92,6 @@ namespace MyPhotoWebApi.Services
                 var update = Builders<Photo>.Update
                     .SetOnInsert(x => x.Path, path)
                     .SetOnInsert(x => x.FileName, fileName)
-                    .SetOnInsert(x => x.FolderId, p.FolderId)
                     .SetOnInsert(x => x.MediaType, p.MediaType)
                     .SetOnInsert(x => x.DateTaken, p.DateTaken)
                     .SetOnInsert(x => x.Tags, p.Tags)
@@ -106,33 +105,15 @@ namespace MyPhotoWebApi.Services
             await _photosCollection.BulkWriteAsync(models, new BulkWriteOptions { IsOrdered = false });
         }
 
-        // Back-compat (legacy clients): recursive prefix match by path.
         public async Task<List<Photo>> GetThumbPage(string userPass, string pathPrefix, int top, int skip)
-        {
-            return await GetThumbPageByFolder(userPass, folderId: null, pathPrefix: pathPrefix, top: top, skip: skip);
-        }
-
-        // Preferred: non-recursive exact folder ownership.
-        public async Task<List<Photo>> GetThumbPageByFolder(string userPass, string folderId, string pathPrefix, int top, int skip)
         {
             // Dedicated endpoint path: avoids OData $select projection, which doesn't translate through Mongo LINQ.
             if (top <= 0) top = 100;
             if (top > 500) top = 500; // safety cap
             if (skip < 0) skip = 0;
-            folderId ??= string.Empty;
             pathPrefix ??= string.Empty;
 
-            FilterDefinition<Photo> filter;
-            if (!string.IsNullOrWhiteSpace(folderId))
-            {
-                filter = Builders<Photo>.Filter.Eq(x => x.FolderId, folderId);
-            }
-            else
-            {
-                // Legacy behavior: recursive prefix match.
-                filter = Builders<Photo>.Filter.Regex(x => x.Path, new MongoDB.Bson.BsonRegularExpression("^" + System.Text.RegularExpressions.Regex.Escape(pathPrefix)));
-            }
-
+            var filter = Builders<Photo>.Filter.Regex(x => x.Path, new MongoDB.Bson.BsonRegularExpression("^" + System.Text.RegularExpressions.Regex.Escape(pathPrefix)));
             if (userPass != Startup.HashedUserPass)
             {
                 filter &= Builders<Photo>.Filter.Eq(x => x.IsPrivate, false);

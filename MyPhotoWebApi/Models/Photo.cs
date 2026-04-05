@@ -19,6 +19,11 @@ namespace MyPhotoWebApi.Models
         [BsonElement("path")]
         public string Path { get; set; }
 
+        // Folder ownership (used for non-recursive listing)
+        [BsonRepresentation(BsonType.ObjectId)]
+        [BsonElement("folderId")]
+        public string FolderId { get; set; }
+
         [BsonElement("dateTaken")]
         public DateTime DateTaken { get; set; }  
         

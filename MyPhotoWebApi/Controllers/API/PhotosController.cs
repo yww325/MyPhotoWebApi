@@ -87,12 +87,14 @@ namespace MyPhotoWebApi.Controllers.API
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public async Task<ActionResult<List<Photo>>> GetThumbs(
             [FromHeader, Required, BindRequired] string userPass,
-            [Required, BindRequired] string pathPrefix,
+            string folderId,
+            string pathPrefix,
             int top = 100,
             int skip = 0)
         {
             // We do NOT use OData $select here because it triggers Mongo LINQ translation errors.
-            var photos = await _photoService.GetThumbPage(userPass, pathPrefix, top, skip);
+            // Preferred: folderId (non-recursive). Back-compat: pathPrefix (recursive).
+            var photos = await _photoService.GetThumbPageByFolder(userPass, folderId, pathPrefix, top, skip);
             return Ok(photos);
         }
 

@@ -1,0 +1,7 @@
+2026-04-09 10:14:32,646 [INFO] [EXECUTE] start backfill video thumbnails
+2026-04-09 10:14:32,647 [INFO] appsettings=/home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/MyPhotoWebApi/appsettings.json (exists=True)
+2026-04-09 10:14:32,647 [INFO] mongo=mongodb://localhost:27017 db=MyPhotos col=photos
+2026-04-09 10:14:32,647 [INFO] root=/home/yww/FtpRoot/PicRootFolder exts=['.3gp', '.avi', '.mp4']
+2026-04-09 10:14:32,647 [INFO] log_file=scripts/logs/backfill_video_thumbnails-20260409.log
+2026-04-09 10:15:54,846 [INFO] done mode=EXECUTE
+2026-04-09 10:15:54,847 [INFO] summary processed=181 updated=181 missingFile=0 ffmpegFail=0 elapsed=82.2s

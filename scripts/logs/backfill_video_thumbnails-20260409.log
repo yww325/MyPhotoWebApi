@@ -1,0 +1,52 @@
+2026-04-09 08:57:15,604 [ERROR] pymongo (and bson) required. Install with: pip install pymongo
+2026-04-09 08:57:15,604 [ERROR] Details: No module named 'bson'
+2026-04-09 08:58:37,256 [INFO] [DRY RUN] start backfill video thumbnails
+2026-04-09 08:58:37,256 [INFO] appsettings=/home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/MyPhotoWebApi/appsettings.json (exists=True)
+2026-04-09 08:58:37,256 [INFO] mongo=mongodb://localhost:27017 db=MyPhotos col=photos
+2026-04-09 08:58:37,256 [INFO] root=/home/yww/FtpRoot/PicRootFolder exts=['.3gp', '.avi', '.mp4']
+2026-04-09 08:58:37,256 [INFO] log_file=scripts/logs/backfill_video_thumbnails-20260409.log
+2026-04-09 08:59:08,906 [INFO] [DRY RUN] start backfill video thumbnails
+2026-04-09 08:59:08,907 [INFO] appsettings=/home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/MyPhotoWebApi/appsettings.json (exists=True)
+2026-04-09 08:59:08,907 [INFO] mongo=mongodb://localhost:27017 db=MyPhotos col=photos
+2026-04-09 08:59:08,907 [INFO] root=/home/yww/FtpRoot/PicRootFolder exts=['.3gp', '.avi', '.mp4']
+2026-04-09 08:59:08,907 [INFO] log_file=scripts/logs/backfill_video_thumbnails-20260409.log
+2026-04-09 08:59:09,277 [ERROR] ffmpeg produced no output _id=69916389d36e47ee8dcf7350 file=/home/yww/FtpRoot/PicRootFolder/从2004年到2010年/India From Carol/2006-Jun-13/Hotel 003.avi out=scripts/logs/tmp/69916389d36e47ee8dcf7350.jpg
+2026-04-09 08:59:10,174 [INFO] progress processed=20 updated=19 missingFile=0 ffmpegFail=1 rate=15.82/s last_id=69916500d36e47ee8dcf825b
+2026-04-09 08:59:11,421 [INFO] progress processed=40 updated=39 missingFile=0 ffmpegFail=1 rate=15.93/s last_id=699165bdd36e47ee8dcf8a35
+2026-04-09 08:59:12,454 [INFO] limit reached: 50
+2026-04-09 08:59:12,455 [INFO] done mode=DRY RUN
+2026-04-09 08:59:12,455 [INFO] summary processed=50 updated=49 missingFile=0 ffmpegFail=1 elapsed=3.5s
+2026-04-09 09:07:14,644 [INFO] [DRY RUN] start backfill video thumbnails
+2026-04-09 09:07:14,645 [INFO] appsettings=/home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/MyPhotoWebApi/appsettings.json (exists=True)
+2026-04-09 09:07:14,645 [INFO] mongo=mongodb://localhost:27017 db=MyPhotos col=photos
+2026-04-09 09:07:14,645 [INFO] root=/home/yww/FtpRoot/PicRootFolder exts=['.3gp', '.avi', '.mp4']
+2026-04-09 09:07:14,646 [INFO] log_file=scripts/logs/backfill_video_thumbnails-20260409.log
+2026-04-09 09:07:15,202 [ERROR] ffmpeg produced no output _id=69916389d36e47ee8dcf7350 file=/home/yww/FtpRoot/PicRootFolder/从2004年到2010年/India From Carol/2006-Jun-13/Hotel 003.avi out=scripts/logs/tmp/69916389d36e47ee8dcf7350.jpg
+2026-04-09 09:07:16,180 [INFO] progress processed=20 updated=19 missingFile=0 ffmpegFail=1 rate=13.07/s last_id=69916500d36e47ee8dcf825b
+2026-04-09 09:07:17,596 [INFO] progress processed=40 updated=39 missingFile=0 ffmpegFail=1 rate=13.57/s last_id=699165bdd36e47ee8dcf8a35
+2026-04-09 09:07:20,590 [INFO] progress processed=60 updated=59 missingFile=0 ffmpegFail=1 rate=10.10/s last_id=6993374dfd0c923d14eff252
+2026-04-09 09:07:23,773 [INFO] progress processed=80 updated=79 missingFile=0 ffmpegFail=1 rate=8.77/s last_id=69933871fd0c923d14eff854
+2026-04-09 09:07:27,898 [INFO] progress processed=100 updated=99 missingFile=0 ffmpegFail=1 rate=7.55/s last_id=69933a24fd0c923d14f005e4
+2026-04-09 09:07:27,898 [INFO] limit reached: 100
+2026-04-09 09:07:27,898 [INFO] done mode=DRY RUN
+2026-04-09 09:07:27,898 [INFO] summary processed=100 updated=99 missingFile=0 ffmpegFail=1 elapsed=13.2s
+2026-04-09 09:57:34,490 [INFO] [EXECUTE] start backfill video thumbnails
+2026-04-09 09:57:34,491 [INFO] appsettings=/home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/MyPhotoWebApi/appsettings.json (exists=True)
+2026-04-09 09:57:34,491 [INFO] mongo=mongodb://localhost:27017 db=MyPhotos col=photos
+2026-04-09 09:57:34,491 [INFO] root=/home/yww/FtpRoot/PicRootFolder exts=['.3gp', '.avi', '.mp4']
+2026-04-09 09:57:34,491 [INFO] log_file=scripts/logs/backfill_video_thumbnails-20260409.log
+2026-04-09 09:57:37,960 [ERROR] ffmpeg produced no output _id=69916389d36e47ee8dcf7350 file=/home/yww/FtpRoot/PicRootFolder/从2004年到2010年/India From Carol/2006-Jun-13/Hotel 003.avi out=scripts/logs/tmp/69916389d36e47ee8dcf7350.jpg
+2026-04-09 09:57:42,344 [INFO] progress processed=50 updated=49 missingFile=0 ffmpegFail=1 rate=6.37/s last_id=69933713fd0c923d14eff128
+2026-04-09 09:59:43,667 [INFO] [EXECUTE] start backfill video thumbnails
+2026-04-09 09:59:43,667 [INFO] appsettings=/home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/MyPhotoWebApi/appsettings.json (exists=True)
+2026-04-09 09:59:43,667 [INFO] mongo=mongodb://localhost:27017 db=MyPhotos col=photos
+2026-04-09 09:59:43,667 [INFO] root=/home/yww/FtpRoot/PicRootFolder exts=['.3gp', '.avi', '.mp4']
+2026-04-09 09:59:43,668 [INFO] log_file=scripts/logs/backfill_video_thumbnails-20260409.log
+2026-04-09 09:59:52,260 [INFO] progress processed=50 updated=50 missingFile=0 ffmpegFail=0 rate=5.82/s last_id=69933adefd0c923d14f009ee
+2026-04-09 10:14:32,646 [INFO] [EXECUTE] start backfill video thumbnails
+2026-04-09 10:14:32,647 [INFO] appsettings=/home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/MyPhotoWebApi/appsettings.json (exists=True)
+2026-04-09 10:14:32,647 [INFO] mongo=mongodb://localhost:27017 db=MyPhotos col=photos
+2026-04-09 10:14:32,647 [INFO] root=/home/yww/FtpRoot/PicRootFolder exts=['.3gp', '.avi', '.mp4']
+2026-04-09 10:14:32,647 [INFO] log_file=scripts/logs/backfill_video_thumbnails-20260409.log
+2026-04-09 10:15:54,846 [INFO] done mode=EXECUTE
+2026-04-09 10:15:54,847 [INFO] summary processed=181 updated=181 missingFile=0 ffmpegFail=0 elapsed=82.2s

@@ -53,7 +53,10 @@ _ReSharper*/
 # NCrunch folders and files
 _NCrunch_*/
 _NCrunch_*
-*.ncrunch*UserPass.txt
+*.ncrunch*
+
+# Server password file (must never be committed)
+UserPass*.txt
 api_run.log
 bin/
 obj/

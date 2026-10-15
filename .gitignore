@@ -60,3 +60,6 @@ UserPass*.txt
 api_run.log
 bin/
 obj/
+
+# Build output (deployed on the server, not versioned)
+publish/

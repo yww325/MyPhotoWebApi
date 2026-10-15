@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.FileProviders;
+﻿using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging;
 using MyPhotoWebApi.Helpers;
 using MyPhotoWebApi.Models;
@@ -6,7 +7,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using SixLabors.ImageSharp;
@@ -86,39 +89,17 @@ namespace MyPhotoWebApi.Services
                 {
                     continue;  //no need to add existing file
                 }
-                var photo = new Photo()
-                {
-                    FileName = fileInfo.Name, 
-                    Path = path,
-                    Tags = tags
-                }; 
                 ingestResult.TotalFilesFound++;
-                var fileName = fileInfo.Name.ToLowerInvariant(); 
-                if (fileName.EndsWith(".jpg") || fileName.EndsWith(".jpeg") || fileName.EndsWith(".png") || fileName.EndsWith(".bmp"))
+                var photo = CreatePhoto(fileInfo.PhysicalPath, fileInfo.Name, path, tags);
+                switch (photo?.MediaType)
                 {
-                    photo.MediaType = "photo";
-                    var (dateTime, imageBytes) = GetDateTakenAndThumbnailFromImage(fileInfo.PhysicalPath);
-                    photo.DateTaken = dateTime;
-                    photo.Thumbnail = imageBytes;
-                    ingestResult.PhotosFound++;
-                } 
-                else if (fileName.EndsWith(".wav"))
-                {
-                    photo.MediaType = "sound";
-                    photo.DateTaken = DateTime.Now;
-                    ingestResult.SoundsFound++;
-                }
-                else if (fileName.EndsWith(".avi") || fileName.EndsWith(".mp4") || fileName.EndsWith(".3gp"))
-                {
-                    photo.MediaType = "video";
-                    photo.DateTaken = DateTime.Now;
-                    ingestResult.VideosFound++;
-                }
-                else
-                {
-                    _logger.LogWarning($"{fileInfo.PhysicalPath} is not supported file type.");
-                    ingestResult.UnknownFilesFound++;
-                    continue;
+                    case "photo": ingestResult.PhotosFound++; break;
+                    case "sound": ingestResult.SoundsFound++; break;
+                    case "video": ingestResult.VideosFound++; break;
+                    default:
+                        _logger.LogWarning($"{fileInfo.PhysicalPath} is not supported file type.");
+                        ingestResult.UnknownFilesFound++;
+                        continue;
                 }
 
                 photos.Add(photo);
@@ -131,6 +112,204 @@ namespace MyPhotoWebApi.Services
            
             return ingestResult;
         } 
+
+        /// <summary>Media type stored for a file name, or null when the file type is not supported.</summary>
+        private static string? GetMediaType(string fileName)
+        {
+            switch (System.IO.Path.GetExtension(fileName).ToLowerInvariant())
+            {
+                case ".jpg": case ".jpeg": case ".png": case ".bmp": return "photo";
+                case ".wav": return "sound";
+                case ".avi": case ".mp4": case ".3gp": return "video";
+                default: return null;
+            }
+        }
+
+        /// <summary>Builds the photo entity for a file on disk, or returns null when its type is not supported.</summary>
+        private Photo? CreatePhoto(string physicalPath, string fileName, string path, string[] tags)
+        {
+            var mediaType = GetMediaType(fileName);
+            if (mediaType == null) return null;
+            var photo = new Photo
+            {
+                FileName = fileName,
+                Path = path,
+                Tags = tags,
+                MediaType = mediaType,
+                DateTaken = DateTime.Now
+            };
+            if (mediaType == "photo")
+            {
+                var (dateTime, imageBytes) = GetDateTakenAndThumbnailFromImage(physicalPath);
+                photo.DateTaken = dateTime;
+                photo.Thumbnail = imageBytes;
+            }
+            return photo;
+        }
+
+        #region Upload
+        // Serializes choosing a final file name and moving the upload into place, so two
+        // concurrent uploads of different files with the same name cannot claim the same name.
+        private readonly SemaphoreSlim _placeFileLock = new(1, 1);
+
+        /// <summary>
+        /// Saves uploaded files into the given folder (created if missing) and adds them to the database,
+        /// so they show up immediately without a separate ingest. Each file gets its own result.
+        /// </summary>
+        public async Task<UploadResult> Upload(string folder, IReadOnlyList<IFormFile> files, CancellationToken ct)
+        {
+            var path = _folderService.NormalizeFolderPath(folder)
+                ?? throw new MyPhotoException($"Invalid folder '{folder}'.", MyErrorCode.BadRequest);
+            await _folderService.EnsureFolderPath(path);
+            var directory = _fileProvider.GetFileInfo(path).PhysicalPath!;
+            var tags = Util.GenerateTags(path);
+
+            var result = new UploadResult { Folder = path };
+            foreach (var file in files)
+            {
+                ct.ThrowIfCancellationRequested();
+                result.Results.Add(await UploadOne(file, path, directory, tags, ct));
+            }
+            return result;
+        }
+
+        private async Task<UploadFileResult> UploadOne(IFormFile file, string path, string directory, string[] tags, CancellationToken ct)
+        {
+            // Browsers and some clients send a full client-side path; keep only the name.
+            var fileName = System.IO.Path.GetFileName((file.FileName ?? "").Replace('\\', '/')).Trim();
+            var result = new UploadFileResult { FileName = file.FileName ?? "" };
+            if (fileName.Length == 0 || fileName.StartsWith('.') || fileName.Any(char.IsControl))
+            {
+                result.Status = UploadFileResult.Rejected;
+                result.Error = "Invalid file name.";
+                return result;
+            }
+            if (GetMediaType(fileName) == null)
+            {
+                result.Status = UploadFileResult.Rejected;
+                result.Error = "Unsupported file type.";
+                return result;
+            }
+            if (file.Length == 0)
+            {
+                result.Status = UploadFileResult.Rejected;
+                result.Error = "Empty file.";
+                return result;
+            }
+
+            // Dot-prefixed, so ingest and the file provider ignore it while it is incomplete.
+            var tempPath = System.IO.Path.Combine(directory, $".upload-{Guid.NewGuid():N}.tmp");
+            string? savedPath = null;
+            try
+            {
+                byte[] hash;
+                await using (var target = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+                using (var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+                {
+                    await using var source = file.OpenReadStream();
+                    var buffer = new byte[81920];
+                    int read;
+                    while ((read = await source.ReadAsync(buffer, ct)) > 0)
+                    {
+                        sha.AppendData(buffer, 0, read);
+                        await target.WriteAsync(buffer.AsMemory(0, read), ct);
+                    }
+                    hash = sha.GetHashAndReset();
+                }
+
+                string savedAs;
+                bool duplicate;
+                await _placeFileLock.WaitAsync(ct);
+                try
+                {
+                    (savedAs, duplicate) = await ChooseName(directory, fileName, hash, new FileInfo(tempPath).Length, ct);
+                    if (!duplicate)
+                    {
+                        savedPath = System.IO.Path.Combine(directory, savedAs);
+                        File.Move(tempPath, savedPath);
+                    }
+                }
+                finally
+                {
+                    _placeFileLock.Release();
+                }
+
+                result.SavedAs = savedAs;
+                var existing = await _photoService.FindByPathAndName(path, savedAs);
+                if (duplicate && existing != null)
+                {
+                    result.Status = UploadFileResult.Duplicate;
+                    result.Id = existing.Id;
+                    return result;
+                }
+
+                // New file, or an identical file that is on disk but was never ingested.
+                var photo = CreatePhoto(System.IO.Path.Combine(directory, savedAs), savedAs, path, tags)!;
+                await _photoService.CreateManyPhotos(new[] { photo });
+                result.Id = (await _photoService.FindByPathAndName(path, savedAs))?.Id;
+                result.Status = duplicate ? UploadFileResult.Duplicate : UploadFileResult.Created;
+                savedPath = null; // keep the file
+                _logger.LogInformation($"Uploaded {path}/{savedAs} ({result.Status})");
+                return result;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception e)
+            {
+                // E.g. an image that cannot be decoded; remove what we saved so disk and database stay in sync.
+                _logger.LogWarning(e, $"Upload of {fileName} into {path} failed");
+                if (savedPath != null) TryDelete(savedPath);
+                result.SavedAs = null;
+                result.Status = UploadFileResult.Failed;
+                result.Error = e is SixLabors.ImageSharp.ImageFormatException or SixLabors.ImageSharp.UnknownImageFormatException
+                    ? "The image could not be read."
+                    : "The file could not be saved.";
+                return result;
+            }
+            finally
+            {
+                TryDelete(tempPath);
+            }
+        }
+
+        /// <summary>
+        /// Picks the name an upload is stored under: the original name if free, otherwise the first free
+        /// "name (n).ext". Returns duplicate = true when a file with that name already has identical content.
+        /// </summary>
+        private static async Task<(string Name, bool Duplicate)> ChooseName(string directory, string fileName, byte[] hash, long length, CancellationToken ct)
+        {
+            var stem = System.IO.Path.GetFileNameWithoutExtension(fileName);
+            var extension = System.IO.Path.GetExtension(fileName);
+            for (var n = 0; ; n++)
+            {
+                var candidate = n == 0 ? fileName : $"{stem} ({n}){extension}";
+                var candidatePath = System.IO.Path.Combine(directory, candidate);
+                if (!File.Exists(candidatePath)) return (candidate, false);
+                if (new FileInfo(candidatePath).Length == length && (await HashFile(candidatePath, ct)).AsSpan().SequenceEqual(hash))
+                    return (candidate, true);
+            }
+        }
+
+        private static async Task<byte[]> HashFile(string physicalPath, CancellationToken ct)
+        {
+            await using var stream = new FileStream(physicalPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
+            return await SHA256.HashDataAsync(stream, ct);
+        }
+
+        private void TryDelete(string physicalPath)
+        {
+            try
+            {
+                if (File.Exists(physicalPath)) File.Delete(physicalPath);
+            }
+            catch (Exception e)
+            {
+                _logger.LogWarning(e, $"Could not delete {physicalPath}");
+            }
+        }
+        #endregion
 
         #region Image Processing
         private const int ThumbnailLongSide = 240;

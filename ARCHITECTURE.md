@@ -21,7 +21,7 @@
     - `ConnectionString` / `DatabaseName`：MongoDB 连接（本机 `127.0.0.1:27017`）。
     - `UserPassLocation`：密码文件的**绝对路径**。程序**只在启动时**读取一次，并保存它的 MD5；修改密码后需要重启服务。
 - **OData 路由**：挂载在 `/odata/v1` 前缀下，实体集为 `Photos` 和 `Folders`，元数据地址为 `/odata/v1/$metadata`。
-- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders` 三个控制器）。
+- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders` 三个控制器），包括上传 `POST /api/v1/Photos/upload` 和目录树 `GET /api/v1/Folders/tree`（见第 3 节）。
 - **健康检查**：`/health`，返回 `{"status":"ok","mongo":"ok"}`，会顺带检查 MongoDB 是否可用。
 - **原图**：由程序自己的静态文件中间件（`UseStaticFiles`）从 `RootFolder` 提供，路径为 `/File/<相对路径>`，支持 Range 请求，不提供目录列表。
 - **Swagger**：使用 **NSwag 14**（`AddOpenApiDocument` + `UseOpenApi` + `UseSwaggerUi`），生成 OpenAPI 3.0 文档。
@@ -33,7 +33,24 @@
 - 密码保存在服务器上的纯文本文件里（位置由 `UserPassLocation` 指定）。**该文件绝不能提交到仓库**，`.gitignore` 中的 `UserPass*.txt` 规则会忽略它。
 - 需要权限的接口通过 `userPass` 请求头传递**密码的 MD5**。
 - `GET /api/v1/Default/validate?userPass=<明文密码>` 校验密码，成功时返回 MD5，客户端之后用它作为 `userPass` 请求头。
-- 不带正确 `userPass` 时，读取照片列表会自动隐藏私密照片。注意：文件夹列表和 `/File/` 原图目前**不需要密码**也能访问。
+- 不带正确 `userPass` 时，读取照片列表会自动隐藏私密照片。注意：OData 文件夹列表和 `/File/` 原图目前**不需要密码**也能访问。
+- 上传和目录树接口在读取请求体之前就检查 `userPass`（`RequireUserPassAttribute`），缺少或错误时直接返回 401。
+
+### 上传：`POST /api/v1/Photos/upload`
+- `multipart/form-data`：`folder` 字段为目标目录（如 `2026/香港旅行`，不存在时逐级创建，父目录 id 正确设置），一个或多个 `files` 文件。
+- 单次请求最大 1 GB（与 Nginx 的 `client_max_body_size` 一致）。文件边接收边写入同目录下的隐藏临时文件，写完再改名，不会整个读进内存，也不会留下半个文件。
+- 支持的格式和 ingest 相同（jpg、jpeg、png、bmp、wav、avi、mp4、3gp）。保存后立即读取 EXIF 拍摄时间、生成缩略图并写入数据库，不需要再调用 ingest。
+- 每个文件单独返回结果，部分失败时整个请求仍返回 200：
+    - `created`：已保存；`savedAs` 是服务器上的文件名。
+    - `duplicate`：目录里已有内容完全相同的文件，未重复保存，`id` 是已有照片的 id。
+    - 同名但内容不同的文件会自动改名为 `name (1).jpg`。
+    - `rejected`：文件名不合法、格式不支持或空文件；`failed`：保存或读取图片失败（不会留下文件）。
+- 目录不合法（为空、包含 `..` 或以 `.` 开头的段、超出照片根目录）时返回 400。
+
+### 目录树：`GET /api/v1/Folders/tree`
+- 返回整棵目录树（`FolderNode`：`id`、`path`、`name`、`photoCount`、`totalCount`、`children`），根节点的 `path` 为空字符串，子目录按名称排序。
+- `photoCount` 是该目录本身的文件数，`totalCount` 包含所有子目录（含私密照片）。
+- 树按数据库中的 `path` 构建，不依赖 `parentFolderId`（旧的 ingest 在三层以上目录时会把它设错）。只用 FTP 传上去、还没 ingest 的目录不会出现。
 
 ## 4. 部署与反向代理 (Nginx)
 Nginx 作为入口网关，模拟 IIS 虚拟目录行为。配置文件为 `/etc/nginx/sites-enabled/default`，其中有三个 server 块：

@@ -1,7 +1,9 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
+using MyPhotoWebApi.Helpers;
 using MyPhotoWebApi.Services;
+using System.Threading;
 using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Threading.Tasks;
@@ -16,10 +18,37 @@ namespace MyPhotoWebApi.Controllers.API
     public class PhotosController : ControllerBase
     {
         private readonly PhotoService _photoService;
+        private readonly FileIngestionService _fileIngestionService;
 
-        public PhotosController(PhotoService photoService)
+        // Nginx allows 1 GB per request (client_max_body_size 1G); match it here.
+        private const long MaxUploadBytes = 1L << 30;
+
+        public PhotosController(PhotoService photoService, FileIngestionService fileIngestionService)
         {
             _photoService = photoService; 
+            _fileIngestionService = fileIngestionService;
+        }
+
+        /// <summary>
+        /// Uploads one or more files into a folder (created if missing). Send multipart/form-data with a
+        /// "folder" field such as "2026/Trip" and one or more "files" parts. Every file gets its own result.
+        /// </summary>
+        [HttpPost("upload")]
+        [RequireUserPass]
+        [RequestSizeLimit(MaxUploadBytes)]
+        [RequestFormLimits(MultipartBodyLengthLimit = MaxUploadBytes)]
+        [Consumes("multipart/form-data")]
+        [ProducesResponseType(typeof(UploadResult), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        public async Task<IActionResult> Upload(
+            [FromHeader, Required, BindRequired] string userPass,
+            [FromForm, Required, BindRequired] string folder,
+            [FromForm] List<IFormFile> files,
+            CancellationToken ct)
+        {
+            if (files == null || files.Count == 0) return BadRequest("need at least one file in the \"files\" field");
+            return await Util.ResponseHelper(() => _fileIngestionService.Upload(folder, files, ct));
         }
 
         [HttpPatch("private")]

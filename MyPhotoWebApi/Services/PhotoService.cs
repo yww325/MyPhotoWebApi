@@ -73,6 +73,13 @@ namespace MyPhotoWebApi.Services
             return true;
         }
 
+        public async Task<Photo?> FindByPathAndName(string path, string fileName)
+        {
+            return await _photosCollection.Find(p => p.Path == path && p.FileName == fileName)
+                .Project<Photo>(Builders<Photo>.Projection.Exclude(x => x.Thumbnail))
+                .FirstOrDefaultAsync();
+        }
+
         public async Task CreateManyPhotos(IList<Photo> photos)
         {
             // Root-cause fix for duplicate rows:

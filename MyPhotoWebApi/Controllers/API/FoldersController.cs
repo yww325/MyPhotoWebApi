@@ -1,6 +1,8 @@
 ﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
+using MyPhotoWebApi.Helpers;
+using MyPhotoWebApi.Models;
 using MyPhotoWebApi.Services;
 using System.ComponentModel.DataAnnotations;
 using System.Net;
@@ -36,6 +38,16 @@ namespace MyPhotoWebApi.Controllers.API
             {
                 return StatusCode((int)HttpStatusCode.InternalServerError, "folder creation failed");
             } 
+        }
+
+        /// <summary>The whole folder tree with photo counts, for choosing a folder (e.g. an upload target).</summary>
+        [HttpGet("tree")]
+        [RequireUserPass]
+        [ProducesResponseType(typeof(FolderNode), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        public async Task<ActionResult<FolderNode>> GetTree([FromHeader, Required, BindRequired] string userPass)
+        {
+            return Ok(await _folderService.GetFolderTree());
         }
 
         [HttpDelete]

@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace MyPhotoWebApi.Services
@@ -15,7 +16,7 @@ namespace MyPhotoWebApi.Services
         public static readonly string fallbackParentFolderId = BsonObjectId.Empty.ToString(); // place in root folder if can't find parent
         public const string RootFolderPath = "";
 
-        private const string Delimeter = "\\";
+        private const string Delimeter = "/";
         private readonly ILogger<FolderService> _logger;
         private readonly MyPhotoSettings _myPhotoSettings;
         private readonly IMongoCollection<Folder> _foldersCollection;
@@ -119,6 +120,95 @@ namespace MyPhotoWebApi.Services
         public async Task<Folder> FindFolderById(string id)
         {
             return await _foldersCollection.Find(f => f.Id == id).FirstOrDefaultAsync(); 
+        }
+
+        /// <summary>
+        /// Turns a client-supplied folder path such as "2026/香港旅行" into the stored form
+        /// (segments joined by "/", no leading or trailing slash) and guarantees it stays inside RootFolder.
+        /// Returns null when the path is empty or unsafe.
+        /// </summary>
+        public string? NormalizeFolderPath(string? folder)
+        {
+            if (string.IsNullOrWhiteSpace(folder)) return null;
+            var segments = folder.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (segments.Length == 0) return null;
+            // Dot-prefixed names cover "." and "..", and would also be hidden from the file provider.
+            if (segments.Any(s => s.StartsWith('.') || s.Any(char.IsControl))) return null;
+
+            var path = string.Join(Delimeter, segments);
+            var root = Path.GetFullPath(_myPhotoSettings.RootFolder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var full = Path.GetFullPath(Path.Combine(root, path));
+            return full.StartsWith(root, StringComparison.Ordinal) ? path : null;
+        }
+
+        private readonly SemaphoreSlim _ensureFolderLock = new(1, 1);
+
+        /// <summary>
+        /// Creates every missing level of a normalized folder path, both on disk and as folder entities
+        /// with the correct parent ids, and returns the deepest folder.
+        /// </summary>
+        public async Task<Folder> EnsureFolderPath(string normalizedPath)
+        {
+            // Serialized so concurrent uploads into a new folder do not insert duplicate folder entities.
+            await _ensureFolderLock.WaitAsync();
+            try
+            {
+                var parentId = fallbackParentFolderId;
+                var path = RootFolderPath;
+                Folder folder = null!;
+                foreach (var name in normalizedPath.Split(Delimeter))
+                {
+                    path = path == RootFolderPath ? name : path + Delimeter + name;
+                    CreatePhyscicalFolder(path);
+                    folder = await GetOrCreateFolderEntity(path, name, parentId);
+                    parentId = folder.Id;
+                }
+                return folder;
+            }
+            finally
+            {
+                _ensureFolderLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// Builds the whole folder tree with photo counts. The tree is derived from the "/"-separated
+        /// paths of folders and photos rather than from ParentFolderId, which older ingests did not
+        /// always set correctly.
+        /// </summary>
+        public async Task<FolderNode> GetFolderTree()
+        {
+            var folders = await _foldersCollection.Find(FilterDefinition<Folder>.Empty)
+                .Project(f => new { f.Id, f.Path }).ToListAsync();
+            var counts = await _photosCollection.Aggregate()
+                .Group(p => p.Path, g => new { Path = g.Key, Count = g.Count() }).ToListAsync();
+
+            var root = new FolderNode { Path = RootFolderPath, Name = RootFolderPath };
+            var nodes = new Dictionary<string, FolderNode> { [RootFolderPath] = root };
+
+            FolderNode GetOrAdd(string? rawPath)
+            {
+                var path = (rawPath ?? RootFolderPath).Trim('/');
+                if (nodes.TryGetValue(path, out var node)) return node;
+                var cut = path.LastIndexOf('/');
+                var parent = GetOrAdd(cut < 0 ? RootFolderPath : path[..cut]);
+                node = new FolderNode { Path = path, Name = cut < 0 ? path : path[(cut + 1)..] };
+                parent.Children.Add(node);
+                nodes[path] = node;
+                return node;
+            }
+
+            foreach (var f in folders) GetOrAdd(f.Path).Id = f.Id;
+            foreach (var c in counts) GetOrAdd(c.Path).PhotoCount += c.Count;
+
+            int Finish(FolderNode node)
+            {
+                node.Children.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
+                node.TotalCount = node.PhotoCount + node.Children.Sum(Finish);
+                return node.TotalCount;
+            }
+            Finish(root);
+            return root;
         }
 
         #region private methods

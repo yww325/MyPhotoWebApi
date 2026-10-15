@@ -112,7 +112,10 @@ namespace MyPhotoWebApi.Services
             await _photosCollection.BulkWriteAsync(models, new BulkWriteOptions { IsOrdered = false });
         }
 
-        public async Task<List<Photo>> GetThumbPage(string userPass, string pathPrefix, int top, int skip)
+        /// <summary>Sort keys accepted by <see cref="GetThumbPage"/>.</summary>
+        public static readonly string[] ThumbSortKeys = { "date", "name", "size" };
+
+        public async Task<List<PhotoThumb>> GetThumbPage(string userPass, string pathPrefix, int top, int skip, string orderBy = "date", bool descending = true)
         {
             // Dedicated endpoint path: avoids OData $select projection, which doesn't translate through Mongo LINQ.
             if (top <= 0) top = 100;
@@ -127,6 +130,27 @@ namespace MyPhotoWebApi.Services
                 filter &= Builders<Photo>.Filter.Eq(x => x.IsPrivate, false);
             }
 
+            // File sizes live on disk, not in the database, and a folder holds at most a few thousand
+            // files, so rank the whole folder in memory from a light projection and only load
+            // thumbnails for the requested page.
+            var entries = (await _photosCollection.Find(filter)
+                    .Project(p => new { p.Id, p.FileName, p.DateTaken })
+                    .ToListAsync())
+                .Select(p => new { p.Id, p.FileName, p.DateTaken, Size = orderBy == "size" ? GetFileSize(pathPrefix, p.FileName) : null })
+                .ToList();
+
+            var names = StringComparer.InvariantCultureIgnoreCase;
+            var ordered = orderBy switch
+            {
+                "name" => descending ? entries.OrderByDescending(e => e.FileName, names) : entries.OrderBy(e => e.FileName, names),
+                "size" => descending ? entries.OrderByDescending(e => e.Size ?? -1) : entries.OrderBy(e => e.Size ?? -1),
+                _ => descending ? entries.OrderByDescending(e => e.DateTaken) : entries.OrderBy(e => e.DateTaken),
+            };
+            // Ties (same date, same size) keep a stable order so paging never repeats or skips a file.
+            var pageIds = ordered.ThenBy(e => e.FileName, names).ThenBy(e => e.Id, StringComparer.Ordinal)
+                .Skip(skip).Take(top).Select(e => e.Id).ToList();
+            if (pageIds.Count == 0) return new List<PhotoThumb>();
+
             // Only return fields needed for the grid.
             var projection = Builders<Photo>.Projection
                 .Include(x => x.Id)
@@ -136,9 +160,20 @@ namespace MyPhotoWebApi.Services
                 .Include(x => x.DateTaken)
                 .Include(x => x.Thumbnail)
                 .Include(x => x.IsPrivate);
+            var docs = (await _photosCollection.Find(filter & Builders<Photo>.Filter.In(x => x.Id, pageIds))
+                    .Project<Photo>(projection).ToListAsync())
+                .ToDictionary(d => d.Id);
 
-            var sort = Builders<Photo>.Sort.Descending(x => x.DateTaken);
-            return await _photosCollection.Find(filter).Project<Photo>(projection).Sort(sort).Skip(skip).Limit(top).ToListAsync();
+            return pageIds.Where(docs.ContainsKey)
+                .Select(id => PhotoThumb.From(docs[id], GetFileSize(pathPrefix, docs[id].FileName)))
+                .ToList();
+        }
+
+        /// <summary>Size in bytes of a photo's file on disk, or null when the file is missing.</summary>
+        private long? GetFileSize(string path, string fileName)
+        {
+            var file = new FileInfo(Path.Combine(_myPhotoSettings.RootFolder, path, fileName));
+            return file.Exists ? file.Length : null;
         }
 
         public async Task<bool> MovePhotos(string[] ids, string folderId)

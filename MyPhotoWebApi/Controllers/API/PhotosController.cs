@@ -8,6 +8,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using System.Linq;
 using MyPhotoWebApi.Models;
 
 namespace MyPhotoWebApi.Controllers.API
@@ -111,17 +112,25 @@ namespace MyPhotoWebApi.Controllers.API
             }
         }
 
+        /// <summary>
+        /// Lists one page of the files directly in a folder, with thumbnails and file sizes.
+        /// orderBy is "date" (default), "name" or "size"; descending defaults to true.
+        /// </summary>
         [HttpGet("thumbs")]
         [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-        public async Task<ActionResult<List<Photo>>> GetThumbs(
+        public async Task<ActionResult<List<PhotoThumb>>> GetThumbs(
             [FromHeader, Required, BindRequired] string userPass,
             [Required, BindRequired] string pathPrefix,
             int top = 100,
-            int skip = 0)
+            int skip = 0,
+            string orderBy = "date",
+            bool descending = true)
         {
+            if (!PhotoService.ThumbSortKeys.Contains(orderBy)) return BadRequest($"orderBy must be one of: {string.Join(", ", PhotoService.ThumbSortKeys)}");
             // We do NOT use OData $select here because it triggers Mongo LINQ translation errors.
-            var photos = await _photoService.GetThumbPage(userPass, pathPrefix, top, skip);
+            var photos = await _photoService.GetThumbPage(userPass, pathPrefix, top, skip, orderBy, descending);
             return Ok(photos);
         }
 

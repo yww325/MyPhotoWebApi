@@ -21,7 +21,7 @@
     - `ConnectionString` / `DatabaseName`：MongoDB 连接（本机 `127.0.0.1:27017`）。
     - `UserPassLocation`：密码文件的**绝对路径**。程序**只在启动时**读取一次，并保存它的 MD5；修改密码后需要重启服务。
 - **OData 路由**：挂载在 `/odata/v1` 前缀下，实体集为 `Photos` 和 `Folders`，元数据地址为 `/odata/v1/$metadata`。
-- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders` 三个控制器），包括上传 `POST /api/v1/Photos/upload` 和目录树 `GET /api/v1/Folders/tree`（见第 3 节）。
+- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders` 三个控制器），包括上传 `POST /api/v1/Photos/upload`、目录树 `GET /api/v1/Folders/tree` 和目录内容 `GET /api/v1/Photos/thumbs`（见第 3 节）。
 - **健康检查**：`/health`，返回 `{"status":"ok","mongo":"ok"}`，会顺带检查 MongoDB 是否可用。
 - **原图**：由程序自己的静态文件中间件（`UseStaticFiles`）从 `RootFolder` 提供，路径为 `/File/<相对路径>`，支持 Range 请求，不提供目录列表。
 - **Swagger**：使用 **NSwag 14**（`AddOpenApiDocument` + `UseOpenApi` + `UseSwaggerUi`），生成 OpenAPI 3.0 文档。
@@ -51,6 +51,13 @@
 - 返回整棵目录树（`FolderNode`：`id`、`path`、`name`、`photoCount`、`totalCount`、`children`），根节点的 `path` 为空字符串，子目录按名称排序。
 - `photoCount` 是该目录本身的文件数，`totalCount` 包含所有子目录（含私密照片）。
 - 树按数据库中的 `path` 构建，不依赖 `parentFolderId`（旧的 ingest 在三层以上目录时会把它设错）。只用 FTP 传上去、还没 ingest 的目录不会出现。
+
+### 目录内容（缩略图分页）：`GET /api/v1/Photos/thumbs`
+- 参数：`pathPrefix`（目录路径，根目录为空字符串；只列这一层，不含子目录）、`top`（每页条数，默认 100，最大 500）、`skip`、`orderBy`、`descending`。
+- `orderBy` 可以是 `date`（拍摄时间，默认）、`name`（文件名，不区分大小写）或 `size`（文件大小）；`descending` 默认为 `true`。不传这两个参数时与旧版行为相同（按拍摄时间倒序）。其他取值返回 400。
+- 每项包含 `id`、`fileName`、`mediaType`（`photo`、`video` 或 `sound`）、`path`、`dateTaken`、`thumbnail`（Base64，可能为空）、`isPrivate` 和 `size`（磁盘上的字节数，文件不存在时为空）。
+- 文件大小不存数据库，每次从磁盘读取。排序在内存中完成，只为当前页读取缩略图；排序值相同的文件再按文件名和 id 排，翻页不会重复或漏掉。
+- 不带正确 `userPass` 时不返回私密照片。
 
 ## 4. 部署与反向代理 (Nginx)
 Nginx 作为入口网关，模拟 IIS 虚拟目录行为。配置文件为 `/etc/nginx/sites-enabled/default`，其中有三个 server 块：

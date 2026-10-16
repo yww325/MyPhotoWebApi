@@ -128,8 +128,10 @@ namespace MyPhotoWebApi.Controllers.API
         }
 
         /// <summary>
-        /// Lists one page of the files directly in a folder, with thumbnails and file sizes.
-        /// orderBy is "date" (default), "name" or "size"; descending defaults to true.
+        /// Lists one page of the files in a folder, with thumbnails and file sizes; the X-Total-Count response header
+        /// holds the number of matching files. orderBy is "date" (default), "name" or "size"; descending defaults to true;
+        /// recursive also lists the files of all subfolders and orders them together.
+        /// pathPrefix is the folder path; empty or missing means the root folder.
         /// </summary>
         [HttpGet("thumbs")]
         [ProducesResponseType(StatusCodes.Status200OK)]
@@ -137,16 +139,18 @@ namespace MyPhotoWebApi.Controllers.API
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
         public async Task<ActionResult<List<PhotoThumb>>> GetThumbs(
             [FromHeader, Required, BindRequired] string userPass,
-            [Required, BindRequired] string pathPrefix,
+            string? pathPrefix,
             int top = 100,
             int skip = 0,
             string orderBy = "date",
-            bool descending = true)
+            bool descending = true,
+            bool recursive = false)
         {
             if (!PhotoService.ThumbSortKeys.Contains(orderBy)) return BadRequest($"orderBy must be one of: {string.Join(", ", PhotoService.ThumbSortKeys)}");
             // We do NOT use OData $select here because it triggers Mongo LINQ translation errors.
-            var photos = await _photoService.GetThumbPage(userPass, pathPrefix, top, skip, orderBy, descending);
-            return Ok(photos);
+            var (page, total) = await _photoService.GetThumbPage(userPass, pathPrefix, top, skip, orderBy, descending, recursive);
+            Response.Headers["X-Total-Count"] = total.ToString();
+            return Ok(page);
         }
 
     }

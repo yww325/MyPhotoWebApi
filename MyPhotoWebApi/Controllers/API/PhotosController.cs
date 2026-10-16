@@ -52,6 +52,21 @@ namespace MyPhotoWebApi.Controllers.API
             return await Util.ResponseHelper(() => _fileIngestionService.Upload(folder, files, ct));
         }
 
+        /// <summary>
+        /// Permanently deletes photos: each file is removed from disk, then its database record.
+        /// Send the photo ids as a JSON array. Every id gets its own result: deleted, notFound or failed.
+        /// </summary>
+        [HttpDelete]
+        [RequireUserPass]
+        [ProducesResponseType(typeof(PhotoDeleteResult), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        public async Task<IActionResult> Delete([FromHeader, Required, BindRequired] string userPass, [FromBody] string[] ids)
+        {
+            if (ids == null || ids.Length == 0) return BadRequest("need at least one photo id");
+            return await Util.ResponseHelper(() => _photoService.DeletePhotos(ids));
+        }
+
         [HttpPatch("private")]
         [ProducesResponseType(StatusCodes.Status200OK)] 
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]

@@ -176,6 +176,57 @@ namespace MyPhotoWebApi.Services
             return file.Exists ? file.Length : null;
         }
 
+        /// <summary>
+        /// Deletes each photo's file from disk and then its database record. The record is only removed once the
+        /// file is gone (or was already missing), so a failure never leaves a file on disk that the database forgot.
+        /// </summary>
+        public async Task<PhotoDeleteResult> DeletePhotos(IEnumerable<string> ids)
+        {
+            var root = Path.GetFullPath(_myPhotoSettings.RootFolder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var result = new PhotoDeleteResult();
+            foreach (var id in ids.Distinct())
+            {
+                var item = new DeletePhotoResult { Id = id };
+                result.Results.Add(item);
+
+                var photo = MongoDB.Bson.ObjectId.TryParse(id, out _)
+                    ? await _photosCollection.Find(p => p.Id == id)
+                        .Project<Photo>(Builders<Photo>.Projection.Exclude(x => x.Thumbnail)).FirstOrDefaultAsync()
+                    : null;
+                if (photo == null)
+                {
+                    item.Status = DeletePhotoResult.NotFound;
+                    continue;
+                }
+                item.Path = photo.Path;
+                item.FileName = photo.FileName;
+
+                var file = Path.GetFullPath(Path.Combine(root, photo.Path ?? "", photo.FileName ?? ""));
+                if (!file.StartsWith(root, StringComparison.Ordinal) || string.IsNullOrEmpty(photo.FileName))
+                {
+                    item.Status = DeletePhotoResult.Failed;
+                    item.Error = "The photo's file is outside the photo root.";
+                    continue;
+                }
+
+                try
+                {
+                    // File.Delete does nothing when the file is already missing.
+                    File.Delete(file);
+                    await _photosCollection.DeleteOneAsync(p => p.Id == id);
+                    item.Status = DeletePhotoResult.Deleted;
+                    _logger.LogInformation($"Deleted photo {id}: {file}");
+                }
+                catch (Exception e)
+                {
+                    _logger.LogError(e, $"Failed to delete photo {id}: {file}");
+                    item.Status = DeletePhotoResult.Failed;
+                    item.Error = e.Message;
+                }
+            }
+            return result;
+        }
+
         public async Task<bool> MovePhotos(string[] ids, string folderId)
         {
             try

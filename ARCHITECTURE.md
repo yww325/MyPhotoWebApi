@@ -21,7 +21,7 @@
     - `ConnectionString` / `DatabaseName`：MongoDB 连接（本机 `127.0.0.1:27017`）。
     - `UserPassLocation`：密码文件的**绝对路径**。程序**只在启动时**读取一次，并保存它的 MD5；修改密码后需要重启服务。
 - **OData 路由**：挂载在 `/odata/v1` 前缀下，实体集为 `Photos` 和 `Folders`，元数据地址为 `/odata/v1/$metadata`。
-- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders` 三个控制器），包括上传 `POST /api/v1/Photos/upload`、目录树 `GET /api/v1/Folders/tree` 和目录内容 `GET /api/v1/Photos/thumbs`（见第 3 节）。
+- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders` 三个控制器），包括上传 `POST /api/v1/Photos/upload`、目录树 `GET /api/v1/Folders/tree`、目录内容 `GET /api/v1/Photos/thumbs` 和删除 `DELETE /api/v1/Photos`（见第 3 节）。
 - **健康检查**：`/health`，返回 `{"status":"ok","mongo":"ok"}`，会顺带检查 MongoDB 是否可用。
 - **原图**：由程序自己的静态文件中间件（`UseStaticFiles`）从 `RootFolder` 提供，路径为 `/File/<相对路径>`，支持 Range 请求，不提供目录列表。
 - **Swagger**：使用 **NSwag 14**（`AddOpenApiDocument` + `UseOpenApi` + `UseSwaggerUi`），生成 OpenAPI 3.0 文档。
@@ -34,7 +34,7 @@
 - 需要权限的接口通过 `userPass` 请求头传递**密码的 MD5**。
 - `GET /api/v1/Default/validate?userPass=<明文密码>` 校验密码，成功时返回 MD5，客户端之后用它作为 `userPass` 请求头。
 - 不带正确 `userPass` 时，读取照片列表会自动隐藏私密照片。注意：OData 文件夹列表和 `/File/` 原图目前**不需要密码**也能访问。
-- 上传和目录树接口在读取请求体之前就检查 `userPass`（`RequireUserPassAttribute`），缺少或错误时直接返回 401。
+- 上传、目录树和删除接口在读取请求体之前就检查 `userPass`（`RequireUserPassAttribute`），缺少或错误时直接返回 401。
 
 ### 上传：`POST /api/v1/Photos/upload`
 - `multipart/form-data`：`folder` 字段为目标目录（如 `2026/香港旅行`，不存在时逐级创建，父目录 id 正确设置），一个或多个 `files` 文件。
@@ -58,6 +58,12 @@
 - 每项包含 `id`、`fileName`、`mediaType`（`photo`、`video` 或 `sound`）、`path`、`dateTaken`、`thumbnail`（Base64，可能为空）、`isPrivate` 和 `size`（磁盘上的字节数，文件不存在时为空）。
 - 文件大小不存数据库，每次从磁盘读取。排序在内存中完成，只为当前页读取缩略图；排序值相同的文件再按文件名和 id 排，翻页不会重复或漏掉。
 - 不带正确 `userPass` 时不返回私密照片。
+
+### 删除照片：`DELETE /api/v1/Photos`
+- 请求体为照片 id 的 JSON 数组，如 `["6ad1...","6ad2..."]`；需要 `userPass`（缺少或错误时直接返回 401），数组为空时返回 400。
+- **永久删除**：先删除磁盘上的文件，成功后再删除数据库记录（缩略图存在记录里，一起删掉）。文件删不掉时保留记录，不会出现“记录没了文件还在”的情况；文件本来就不在时只删记录。
+- 每个 id 单独返回结果，部分失败时整个请求仍返回 200：`deleted`、`notFound`（没有这张照片）或 `failed`（什么都没删，`error` 说明原因）。
+- 目录本身不会被删除；目录树里的数量按剩下的照片重新统计。
 
 ## 4. 部署与反向代理 (Nginx)
 Nginx 作为入口网关，模拟 IIS 虚拟目录行为。配置文件为 `/etc/nginx/sites-enabled/default`，其中有三个 server 块：

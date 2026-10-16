@@ -1,6 +1,0 @@
-{
-  "servicePorts": {
-    "mongo": 31339,
-    "dt-api": 32462
-  }
-}

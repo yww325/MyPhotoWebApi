@@ -39,13 +39,21 @@
 ### 上传：`POST /api/v1/Photos/upload`
 - `multipart/form-data`：`folder` 字段为目标目录（如 `2026/香港旅行`，不存在时逐级创建，父目录 id 正确设置），一个或多个 `files` 文件。
 - 单次请求最大 1 GB（与 Nginx 的 `client_max_body_size` 一致）。文件边接收边写入同目录下的隐藏临时文件，写完再改名，不会整个读进内存，也不会留下半个文件。
-- 支持的格式和 ingest 相同（jpg、jpeg、png、bmp、wav、avi、mp4、3gp）。保存后立即读取 EXIF 拍摄时间、生成缩略图并写入数据库，不需要再调用 ingest。
+- 支持的格式和 ingest 相同（jpg、jpeg、png、bmp、wav、avi、mp4、3gp）。保存后立即读取拍摄时间（规则见下方“拍摄时间 dateTaken”）、生成缩略图并写入数据库，不需要再调用 ingest。
 - 每个文件单独返回结果，部分失败时整个请求仍返回 200：
     - `created`：已保存；`savedAs` 是服务器上的文件名。
     - `duplicate`：目录里已有内容完全相同的文件，未重复保存，`id` 是已有照片的 id。
     - 同名但内容不同的文件会自动改名为 `name (1).jpg`。
     - `rejected`：文件名不合法、格式不支持或空文件；`failed`：保存或读取图片失败（不会留下文件）。
 - 目录不合法（为空、包含 `..` 或以 `.` 开头的段、超出照片根目录）时返回 400。
+
+### 拍摄时间 `dateTaken`
+- 上传和 ingest 都按以下顺序确定，都没有时才用入库时间：
+    - 照片：EXIF 的 DateTimeOriginal，其次是文件名里的时间。
+    - 视频和声音：文件名里的时间，其次是 MP4/QuickTime 文件头的录制时间。文件名和 EXIF 一样是拍摄地的当地时间，所以同一趟旅行的视频和照片落在同一天；文件头的时间是 UTC。
+    - 文件名里的时间指 `yyyyMMdd_HHmmss` 或 `yyyyMMdd-HHmmss` 形式，例如 `20210710_115044.mp4`、`VID_20210710_115044.mp4`、`Screenshot_20210710-115044.jpg`。
+- EXIF 和文件名里的时间没有时区，按服务器时区（香港时间）换算成 UTC 存入数据库；客户端按香港时间换算回来，就是原来的拍摄时钟时间。
+- 这套规则只用于新入库的文件。2026 年 2 月之前入库的视频和没有 EXIF 的照片，存的仍是入库时间，可以从毫秒不为 0 认出来（EXIF 和文件名里的时间精确到秒）。
 
 ### 目录树：`GET /api/v1/Folders/tree`
 - 返回整棵目录树（`FolderNode`：`id`、`path`、`name`、`photoCount`、`totalCount`、`children`），根节点的 `path` 为空字符串，子目录按名称排序。

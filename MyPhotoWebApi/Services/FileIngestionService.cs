@@ -16,6 +16,8 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Processing;
 using MetadataExtractor;
 using MetadataExtractor.Formats.Exif;
+using MetadataExtractor.Formats.QuickTime;
+using System.Globalization;
 
 namespace MyPhotoWebApi.Services
 {
@@ -136,15 +138,63 @@ namespace MyPhotoWebApi.Services
                 Path = path,
                 Tags = tags,
                 MediaType = mediaType,
-                DateTaken = DateTime.Now
             };
+            DateTime? dateTaken;
             if (mediaType == "photo")
             {
                 var (dateTime, imageBytes) = GetDateTakenAndThumbnailFromImage(physicalPath);
-                photo.DateTaken = dateTime;
+                dateTaken = dateTime ?? DateFromFileName(fileName);
                 photo.Thumbnail = imageBytes;
             }
+            else
+            {
+                // A camera's file name holds local time like EXIF does, so it keeps a trip's videos on the same
+                // days as its photos; the movie header's UTC time is the fallback.
+                dateTaken = DateFromFileName(fileName) ?? GetMovieCreated(physicalPath);
+            }
+            // Ingest time is the last resort; it groups unrelated files under the day they were ingested.
+            photo.DateTaken = dateTaken ?? DateTime.Now;
             return photo;
+        }
+
+        /// <summary>
+        /// The recording time of an MP4 or QuickTime movie, which its header stores in UTC; null when the header
+        /// is missing or unset (an unset time reads as 1904, the format's epoch).
+        /// </summary>
+        private DateTime? GetMovieCreated(string path)
+        {
+            try
+            {
+                var header = ImageMetadataReader.ReadMetadata(path).OfType<QuickTimeMovieHeaderDirectory>().FirstOrDefault();
+                if (header != null && header.TryGetDateTime(QuickTimeMovieHeaderDirectory.TagCreated, out var created) && created.Year >= 1971)
+                {
+                    return DateTime.SpecifyKind(created, DateTimeKind.Utc);
+                }
+            }
+            catch (Exception)
+            {
+                _logger.LogWarning($"movie file {path} can't load its creation time");
+            }
+            return null;
+        }
+
+        private static readonly Regex FileNameDate = new(@"(?<!\d)(\d{8})[_-](\d{6})(?!\d)");
+
+        /// <summary>
+        /// The time in a camera-style file name such as 20210710_115044.mp4, VID_20210710_115044.mp4 or
+        /// Screenshot_20210710-115044.jpg. Like EXIF times it is the local time where the file was made.
+        /// </summary>
+        internal static DateTime? DateFromFileName(string fileName)
+        {
+            var match = FileNameDate.Match(fileName);
+            if (match.Success
+                && DateTime.TryParseExact(match.Groups[1].Value + match.Groups[2].Value, "yyyyMMddHHmmss",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
+                && date.Year >= 1990 && date <= DateTime.Now.AddDays(1))
+            {
+                return date;
+            }
+            return null;
         }
 
         #region Upload
@@ -314,9 +364,10 @@ namespace MyPhotoWebApi.Services
         #region Image Processing
         private const int ThumbnailLongSide = 240;
 
-        private Tuple<DateTime, byte[]> GetDateTakenAndThumbnailFromImage(string path)
+        /// <summary>The EXIF capture time, or null when the image has none, and a thumbnail.</summary>
+        private Tuple<DateTime?, byte[]> GetDateTakenAndThumbnailFromImage(string path)
         {
-            DateTime dateTaken = DateTime.Now;
+            DateTime? dateTaken = null;
             try
             {
                 var directories = ImageMetadataReader.ReadMetadata(path);
@@ -342,7 +393,7 @@ namespace MyPhotoWebApi.Services
                 using (var ms = new MemoryStream())
                 {
                     image.SaveAsJpeg(ms);
-                    return new Tuple<DateTime, byte[]>(dateTaken, ms.ToArray());
+                    return new Tuple<DateTime?, byte[]>(dateTaken, ms.ToArray());
                 }
             }
         }

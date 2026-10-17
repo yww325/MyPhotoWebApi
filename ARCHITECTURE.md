@@ -21,7 +21,7 @@
     - `ConnectionString` / `DatabaseName`：MongoDB 连接（本机 `127.0.0.1:27017`）。
     - `UserPassLocation`：密码文件的**绝对路径**。程序**只在启动时**读取一次，并保存它的 MD5；修改密码后需要重启服务。
 - **OData 路由**：挂载在 `/odata/v1` 前缀下，实体集为 `Photos` 和 `Folders`，元数据地址为 `/odata/v1/$metadata`。
-- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders` 三个控制器），包括上传 `POST /api/v1/Photos/upload`、目录树 `GET /api/v1/Folders/tree`、目录内容 `GET /api/v1/Photos/thumbs` 、删除照片 `DELETE /api/v1/Photos` 和删除空目录 `DELETE /api/v1/Folders/empty`（见第 3 节）。
+- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders` 三个控制器），包括上传 `POST /api/v1/Photos/upload`、目录树 `GET /api/v1/Folders/tree`、目录内容 `GET /api/v1/Photos/thumbs` 、删除照片 `DELETE /api/v1/Photos`、移动照片 `POST /api/v1/Photos/move-to` 和删除空目录 `DELETE /api/v1/Folders/empty`（见第 3 节）。
 - **健康检查**：`/health`，返回 `{"status":"ok","mongo":"ok"}`，会顺带检查 MongoDB 是否可用。
 - **原图**：由程序自己的静态文件中间件（`UseStaticFiles`）从 `RootFolder` 提供，路径为 `/File/<相对路径>`，支持 Range 请求，不提供目录列表。
 - **Swagger**：使用 **NSwag 14**（`AddOpenApiDocument` + `UseOpenApi` + `UseSwaggerUi`），生成 OpenAPI 3.0 文档。
@@ -74,6 +74,13 @@
 - **永久删除**：先删除磁盘上的文件，成功后再删除数据库记录（缩略图存在记录里，一起删掉）。文件删不掉时保留记录，不会出现“记录没了文件还在”的情况；文件本来就不在时只删记录。
 - 每个 id 单独返回结果，部分失败时整个请求仍返回 200：`deleted`、`notFound`（没有这张照片）或 `failed`（什么都没删，`error` 说明原因）。
 - 目录本身不会被删除；目录树里的数量按剩下的照片重新统计。
+
+### 移动照片：`POST /api/v1/Photos/move-to`
+- 请求体为 JSON：`{"folder":"2026/香港旅行","ids":["6ad1...","6ad2..."]}`。`folder` 为空字符串表示根目录；其他目录不存在时逐级创建（只在真正要移动第一张照片时才创建，全部失败时不会留下新目录）。需要 `userPass`（缺少或错误时直接返回 401），`ids` 为空返回 400，目录不合法返回 400。
+- 每张照片先移动磁盘上的文件，再更新数据库记录的 `path`、`tags`，改名时还有 `fileName`。记录的其他字段（包括 `dateTaken`、缩略图、私密标记）都不变，所以按日期的排序不受影响；文件的修改时间也保留。
+- 目标目录里已有同名文件或同名记录时，自动改名为 `name (1).jpg`，不会覆盖。
+- 每个 id 单独返回结果，部分失败时整个请求仍返回 200：`moved`（`from` 是原目录，`savedAs` 是新文件名；已在目标目录的照片也算 `moved`）、`notFound`（没有这张照片）或 `failed`（照片留在原处，`error` 说明原因，例如磁盘上找不到文件）。
+- 旧的 `PATCH /api/v1/Photos/move?folderId=...`（请求体为 id 数组）保持不变：按目录 id 指定目标，不能移到根目录，重名时失败，遇到第一个失败就停止，只返回整体成功或失败（500）。
 
 ### 删除空目录：`DELETE /api/v1/Folders/empty?folderPath=...`
 - 需要 `userPass`（缺少或错误时直接返回 401）。只删除完全空的目录：数据库里没有照片和子目录，磁盘上的目录里也没有任何文件或子目录（没 ingest 的文件也算）。

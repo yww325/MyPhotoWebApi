@@ -238,6 +238,111 @@ namespace MyPhotoWebApi.Services
             return result;
         }
 
+        /// <summary>
+        /// Moves photos into <paramref name="folder"/> ("" is the root; other folders are created when needed):
+        /// each file on disk and then its record's path, tags and, if renamed, file name. Nothing else in the record
+        /// changes, so dateTaken and the order by date stay as they were. A name already used in the target
+        /// folder, by a file or a record, gets " (n)" added like an upload. Every id gets its own result, and a
+        /// photo that fails stays where it was.
+        /// </summary>
+        public async Task<PhotoMoveResult> MovePhotosTo(string folder, IEnumerable<string> ids)
+        {
+            var target = string.IsNullOrWhiteSpace(folder)
+                ? FolderService.RootFolderPath
+                : _folderService.NormalizeFolderPath(folder) ?? throw new MyPhotoException($"Invalid folder '{folder}'.", MyErrorCode.BadRequest);
+            // Created only once a photo is about to move, so a request where every photo fails leaves no new folder.
+            var folderReady = target == FolderService.RootFolderPath;
+            var root = Path.GetFullPath(_myPhotoSettings.RootFolder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var directory = Path.Combine(root, target);
+            var tags = Util.GenerateTags(target);
+
+            var result = new PhotoMoveResult { Folder = target };
+            foreach (var id in ids.Distinct())
+            {
+                var item = new MovePhotoResult { Id = id };
+                result.Results.Add(item);
+
+                var photo = ObjectId.TryParse(id, out _)
+                    ? await _photosCollection.Find(p => p.Id == id)
+                        .Project<Photo>(Builders<Photo>.Projection.Exclude(x => x.Thumbnail)).FirstOrDefaultAsync()
+                    : null;
+                if (photo == null)
+                {
+                    item.Status = MovePhotoResult.NotFound;
+                    continue;
+                }
+                item.From = photo.Path;
+                item.FileName = photo.FileName;
+                if ((photo.Path ?? "") == target)
+                {
+                    item.Status = MovePhotoResult.Moved;
+                    item.SavedAs = photo.FileName;
+                    continue;
+                }
+
+                var source = Path.GetFullPath(Path.Combine(root, photo.Path ?? "", photo.FileName ?? ""));
+                if (!source.StartsWith(root, StringComparison.Ordinal) || string.IsNullOrEmpty(photo.FileName))
+                {
+                    item.Status = MovePhotoResult.Failed;
+                    item.Error = "The photo's file is outside the photo root.";
+                    continue;
+                }
+                if (!File.Exists(source))
+                {
+                    item.Status = MovePhotoResult.Failed;
+                    item.Error = "The photo's file is missing on disk.";
+                    continue;
+                }
+
+                string? destination = null;
+                try
+                {
+                    if (!folderReady)
+                    {
+                        await _folderService.EnsureFolderPath(target);
+                        folderReady = true;
+                    }
+                    var name = await FreeName(directory, target, photo.FileName);
+                    destination = Path.Combine(directory, name);
+                    // Fails instead of overwriting if another request took the name meanwhile.
+                    File.Move(source, destination);
+                    var update = Builders<Photo>.Update
+                        .Set(p => p.Path, target)
+                        .Set(p => p.FileName, name)
+                        .Set(p => p.Tags, tags);
+                    await _photosCollection.UpdateOneAsync(p => p.Id == id, update);
+                    item.Status = MovePhotoResult.Moved;
+                    item.SavedAs = name;
+                    _logger.LogInformation($"Moved photo {id} from {source} to {destination}");
+                }
+                catch (Exception e)
+                {
+                    _logger.LogError(e, $"Failed to move photo {id} from {source} to {target}");
+                    // Put the file back if it already moved but the record could not follow.
+                    if (destination != null && File.Exists(destination) && !File.Exists(source))
+                    {
+                        try { File.Move(destination, source); }
+                        catch (Exception back) { _logger.LogError(back, $"Could not move {destination} back to {source}"); }
+                    }
+                    item.Status = MovePhotoResult.Failed;
+                    item.Error = e.Message;
+                }
+            }
+            return result;
+        }
+
+        /// <summary>The file name itself if neither a file nor a record in the folder uses it, else the first free "name (n).ext".</summary>
+        private async Task<string> FreeName(string directory, string folder, string fileName)
+        {
+            var stem = Path.GetFileNameWithoutExtension(fileName);
+            var extension = Path.GetExtension(fileName);
+            for (var n = 0; ; n++)
+            {
+                var candidate = n == 0 ? fileName : $"{stem} ({n}){extension}";
+                if (!File.Exists(Path.Combine(directory, candidate)) && await FindByPathAndName(folder, candidate) == null) return candidate;
+            }
+        }
+
         public async Task<bool> MovePhotos(string[] ids, string folderId)
         {
             try

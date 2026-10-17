@@ -103,6 +103,26 @@ namespace MyPhotoWebApi.Controllers.API
             }
         }
 
+        /// <summary>
+        /// Moves photos into a folder given by path ("" is the root; others are created if missing), both the files
+        /// and their records; dateTaken is kept. A name already used there gets " (n)" added. Send
+        /// {"folder": "...", "ids": [...]}. Every id gets its own result: moved, notFound or failed.
+        /// </summary>
+        [HttpPost("move-to")]
+        [RequireUserPass]
+        [ProducesResponseType(typeof(PhotoMoveResult), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        public async Task<IActionResult> MoveTo([FromHeader, Required, BindRequired] string userPass, [FromBody] PhotoMoveRequest request)
+        {
+            if (request?.Ids == null || request.Ids.Length == 0) return BadRequest("need at least one photo id");
+            return await Util.ResponseHelper(() => _photoService.MovePhotosTo(request.Folder ?? "", request.Ids));
+        }
+
+        /// <summary>
+        /// Older move by target folder id; stops at the first failure and reports only overall success.
+        /// Kept unchanged for existing clients; new clients should use move-to.
+        /// </summary>
         [HttpPatch("move")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]

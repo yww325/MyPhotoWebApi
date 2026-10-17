@@ -171,6 +171,44 @@ namespace MyPhotoWebApi.Services
             }
         }
 
+        public enum EmptyFolderDeleteResult { Deleted, NotFound, NotEmpty }
+
+        /// <summary>
+        /// Deletes a folder that holds nothing: no photos or subfolders in the database and no entries on disk.
+        /// Removes both its directory and its database entry. Serialized with folder creation, so an upload
+        /// cannot recreate the folder halfway through.
+        /// </summary>
+        public async Task<EmptyFolderDeleteResult> DeleteEmptyFolder(string normalizedPath)
+        {
+            await _ensureFolderLock.WaitAsync();
+            try
+            {
+                var branch = await _foldersCollection
+                    .Find(f => f.Path == normalizedPath || f.Path.StartsWith(normalizedPath + Delimeter))
+                    .Project(f => f.Path).ToListAsync();
+                var directory = Path.Combine(_myPhotoSettings.RootFolder, normalizedPath);
+                var onDisk = Directory.Exists(directory);
+                if (branch.Count == 0 && !onDisk) return EmptyFolderDeleteResult.NotFound;
+                if (branch.Any(p => p != normalizedPath)) return EmptyFolderDeleteResult.NotEmpty;
+                var hasPhotos = await _photosCollection
+                    .Find(p => p.Path == normalizedPath || p.Path.StartsWith(normalizedPath + Delimeter)).AnyAsync();
+                if (hasPhotos) return EmptyFolderDeleteResult.NotEmpty;
+                if (onDisk)
+                {
+                    // Files copied in without an ingest are not in the database but still count.
+                    if (Directory.EnumerateFileSystemEntries(directory).Any()) return EmptyFolderDeleteResult.NotEmpty;
+                    Directory.Delete(directory, recursive: false);
+                }
+                await _foldersCollection.DeleteManyAsync(f => f.Path == normalizedPath);
+                _logger.LogInformation($"Deleted empty folder {normalizedPath}");
+                return EmptyFolderDeleteResult.Deleted;
+            }
+            finally
+            {
+                _ensureFolderLock.Release();
+            }
+        }
+
         /// <summary>
         /// Builds the whole folder tree with photo counts. The tree is derived from the "/"-separated
         /// paths of folders and photos rather than from ParentFolderId, which older ingests did not

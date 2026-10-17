@@ -50,6 +50,31 @@ namespace MyPhotoWebApi.Controllers.API
             return Ok(await _folderService.GetFolderTree());
         }
 
+        /// <summary>
+        /// Deletes an empty folder, both its directory on disk and its database entry. Returns 409 when the folder
+        /// still has photos, subfolders or any files on disk, 404 when it does not exist, and 400 for the root
+        /// or an invalid path.
+        /// </summary>
+        [HttpDelete("empty")]
+        [RequireUserPass]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status409Conflict)]
+        public async Task<IActionResult> DeleteEmptyFolder([FromHeader, Required, BindRequired] string userPass, [FromQuery, Required, BindRequired] string folderPath)
+        {
+            var path = _folderService.NormalizeFolderPath(folderPath);
+            if (path == null) return BadRequest("Invalid folder.");
+            return await _folderService.DeleteEmptyFolder(path) switch
+            {
+                FolderService.EmptyFolderDeleteResult.Deleted => Ok(new { folder = path, status = "deleted" }),
+                FolderService.EmptyFolderDeleteResult.NotFound => NotFound("No such folder."),
+                _ => Conflict("The folder is not empty."),
+            };
+        }
+
+        /// <summary>Removes the database entries of a folder branch (folders and photos); files on disk stay.</summary>
         [HttpDelete]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]

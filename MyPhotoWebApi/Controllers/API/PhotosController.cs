@@ -20,14 +20,16 @@ namespace MyPhotoWebApi.Controllers.API
     {
         private readonly PhotoService _photoService;
         private readonly FileIngestionService _fileIngestionService;
+        private readonly AiTagService _aiTagService;
 
         // Nginx allows 1 GB per request (client_max_body_size 1G); match it here.
         private const long MaxUploadBytes = 1L << 30;
 
-        public PhotosController(PhotoService photoService, FileIngestionService fileIngestionService)
+        public PhotosController(PhotoService photoService, FileIngestionService fileIngestionService, AiTagService aiTagService)
         {
             _photoService = photoService; 
             _fileIngestionService = fileIngestionService;
+            _aiTagService = aiTagService;
         }
 
         /// <summary>
@@ -117,6 +119,26 @@ namespace MyPhotoWebApi.Controllers.API
         {
             if (request?.Ids == null || request.Ids.Length == 0) return BadRequest("need at least one photo id");
             return await Util.ResponseHelper(() => _photoService.MovePhotosTo(request.Folder ?? "", request.Ids));
+        }
+
+        /// <summary>
+        /// Asks the vision model for up to 5 tags per photo and stores them after the folder-name tags. Photos that already
+        /// have AI tags are skipped unless regenerate is true, which replaces them. Send {"ids": [...], "regenerate": false},
+        /// at most 50 ids; calls to the model are paced, so a request can take a while. Every id gets its own result:
+        /// tagged, skipped, notFound or failed. Returns 503 when no API key is configured.
+        /// </summary>
+        [HttpPost("ai-tags")]
+        [RequireUserPass]
+        [ProducesResponseType(typeof(AiTagResult), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+        public async Task<IActionResult> AiTags([FromHeader, Required, BindRequired] string userPass, [FromBody] AiTagRequest request, CancellationToken ct)
+        {
+            if (request?.Ids == null || request.Ids.Length == 0) return BadRequest("need at least one photo id");
+            if (request.Ids.Length > AiTagService.MaxIdsPerRequest) return BadRequest($"at most {AiTagService.MaxIdsPerRequest} photo ids per request");
+            if (!_aiTagService.IsConfigured) return StatusCode(StatusCodes.Status503ServiceUnavailable, "AI tagging is not configured on this server");
+            return await Util.ResponseHelper(() => _aiTagService.TagPhotos(request.Ids, request.Regenerate, ct));
         }
 
         /// <summary>

@@ -159,6 +159,20 @@ namespace MyPhotoWebApi.Controllers.API
         }
 
         /// <summary>
+        /// The technical details of a photo's file, read from the file: size, dimensions, duration, camera, exposure, the EXIF
+        /// capture time and place. Returns labelled values in display order, only the ones the file has.
+        /// </summary>
+        [HttpGet("details")]
+        [RequireUserPass]
+        [ProducesResponseType(typeof(PhotoDetails), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> Details([FromHeader, Required, BindRequired] string userPass, [Required, BindRequired] string id)
+        {
+            return await Util.ResponseHelper(() => _photoService.GetDetails(id));
+        }
+
+        /// <summary>
         /// Older move by target folder id; stops at the first failure and reports only overall success.
         /// Kept unchanged for existing clients; new clients should use move-to.
         /// </summary>

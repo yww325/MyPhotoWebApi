@@ -27,7 +27,7 @@
         - `MaxRequestsPerMinute`：调用模型的速率上限，默认每分钟 10 次（Google 免费层每分钟只允许少量请求）。同一实例的所有请求共用这个限速。
         - `ReasoningEffort`：默认 `minimal`，让思考 token（按输出计费）接近 0；厂商不支持时设为空字符串即可不发送。
 - **OData 路由**：挂载在 `/odata/v1` 前缀下，实体集为 `Photos` 和 `Folders`，元数据地址为 `/odata/v1/$metadata`。
-- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders` 三个控制器），包括上传 `POST /api/v1/Photos/upload`、目录树 `GET /api/v1/Folders/tree`、目录内容 `GET /api/v1/Photos/thumbs` 、删除照片 `DELETE /api/v1/Photos`、移动照片 `POST /api/v1/Photos/move-to`、AI 标签 `POST /api/v1/Photos/ai-tags`、修改标签 `PUT /api/v1/Photos/tags` 和删除空目录 `DELETE /api/v1/Folders/empty`（见第 3 节）。
+- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders` 三个控制器），包括上传 `POST /api/v1/Photos/upload`、目录树 `GET /api/v1/Folders/tree`、目录内容 `GET /api/v1/Photos/thumbs` 、删除照片 `DELETE /api/v1/Photos`、移动照片 `POST /api/v1/Photos/move-to`、AI 标签 `POST /api/v1/Photos/ai-tags`、修改标签 `PUT /api/v1/Photos/tags`、照片详情 `GET /api/v1/Photos/details` 和删除空目录 `DELETE /api/v1/Folders/empty`（见第 3 节）。
 - **健康检查**：`/health`，返回 `{"status":"ok","mongo":"ok"}`，会顺带检查 MongoDB 是否可用。
 - **原图**：由程序自己的静态文件中间件（`UseStaticFiles`）从 `RootFolder` 提供，路径为 `/File/<相对路径>`，支持 Range 请求，不提供目录列表。
 - **Swagger**：使用 **NSwag 14**（`AddOpenApiDocument` + `UseOpenApi` + `UseSwaggerUi`），生成 OpenAPI 3.0 文档。
@@ -110,6 +110,12 @@
 - 每个 tag 去掉首尾空白，连续空白合并成一个空格，转成小写；空的、重复的、与目录名相同的会被去掉。不过滤停用词。
 - 最多 20 个，每个最多 20 个字符，超过返回 400；没有这张照片返回 404；缺少 `id` 或 `tags` 返回 400。
 - 成功时返回 `{"id":"...","tags":[...]}`，`tags` 是完整的新 tags（目录 tag 在前）。保存期间照片被移动时返回 500，记录不变。
+
+### 照片详情：`GET /api/v1/Photos/details?id=...`
+- 需要 `userPass`（缺少或错误时直接返回 401）。没有这张照片、id 不合法或磁盘上找不到文件时返回 404。
+- 每次请求都用 MetadataExtractor 读取原文件（照片读 EXIF，视频读 MP4/QuickTime 文件头），不存数据库。
+- 返回 `{"id":"...","items":[{"name":"相机","value":"Apple iPhone 15 Pro"}, ...]}`，按显示顺序排列，只包含文件里有的项：文件大小、尺寸、时长、相机、镜头、光圈、快门、ISO、焦距、等效焦距、闪光灯、白平衡、EXIF 拍摄时间、方向、软件、GPS（纬度, 经度）。数值是 MetadataExtractor 给出的描述，例如 `1/120 sec`、`f/1.8`。
+- 目录、文件名和用于排序的 `dateTaken` 在 `thumbs` 的结果里已经有了，这里不再重复。
 
 ### 删除空目录：`DELETE /api/v1/Folders/empty?folderPath=...`
 - 需要 `userPass`（缺少或错误时直接返回 401）。只删除完全空的目录：数据库里没有照片和子目录，磁盘上的目录里也没有任何文件或子目录（没 ingest 的文件也算）。

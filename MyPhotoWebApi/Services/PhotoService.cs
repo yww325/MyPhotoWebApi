@@ -104,6 +104,22 @@ namespace MyPhotoWebApi.Services
             return new PhotoTags { Id = id, Tags = all };
         }
 
+        /// <summary>The technical details of a photo's file, read from the file itself.</summary>
+        public async Task<PhotoDetails> GetDetails(string id)
+        {
+            var photo = ObjectId.TryParse(id, out _)
+                ? await _photosCollection.Find(p => p.Id == id).Project<Photo>(Builders<Photo>.Projection.Exclude(x => x.Thumbnail)).FirstOrDefaultAsync()
+                : null;
+            if (photo == null) throw new MyPhotoException($"Photo {id} is not found.", MyErrorCode.NotFound);
+            var root = Path.GetFullPath(_myPhotoSettings.RootFolder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var file = Path.GetFullPath(Path.Combine(root, photo.Path ?? "", photo.FileName ?? ""));
+            if (!file.StartsWith(root, StringComparison.Ordinal) || !File.Exists(file))
+            {
+                throw new MyPhotoException("The photo's file is missing on disk.", MyErrorCode.NotFound);
+            }
+            return new PhotoDetails { Id = id, Items = PhotoDetailsReader.Read(file) };
+        }
+
         public async Task<Photo?> FindByPathAndName(string path, string fileName)
         {
             return await _photosCollection.Find(p => p.Path == path && p.FileName == fileName)

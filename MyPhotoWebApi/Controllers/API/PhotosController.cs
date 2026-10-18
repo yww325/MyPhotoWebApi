@@ -142,6 +142,23 @@ namespace MyPhotoWebApi.Controllers.API
         }
 
         /// <summary>
+        /// Replaces a photo's tags other than its folder names (AI or hand-added) with the given ones; the folder-name tags
+        /// always stay. Send {"id": "...", "tags": [...]}, at most 20 tags of up to 20 characters; an empty array removes
+        /// them all. Returns the photo's id and all its tags.
+        /// </summary>
+        [HttpPut("tags")]
+        [RequireUserPass]
+        [ProducesResponseType(typeof(PhotoTags), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> SetTags([FromHeader, Required, BindRequired] string userPass, [FromBody] PhotoTags request)
+        {
+            if (string.IsNullOrEmpty(request?.Id) || request.Tags == null) return BadRequest("need a photo id and a tags array");
+            return await Util.ResponseHelper(() => _photoService.SetExtraTags(request.Id, request.Tags));
+        }
+
+        /// <summary>
         /// Older move by target folder id; stops at the first failure and reports only overall success.
         /// Kept unchanged for existing clients; new clients should use move-to.
         /// </summary>

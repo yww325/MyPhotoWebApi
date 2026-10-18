@@ -75,6 +75,35 @@ namespace MyPhotoWebApi.Services
             return true;
         }
 
+        public const int MaxExtraTags = 20;
+        public const int MaxTagLength = 20;
+
+        /// <summary>
+        /// Replaces a photo's tags other than its folder names (AI or hand-added) with <paramref name="tags"/>, trimmed,
+        /// lower-cased and without repeats or folder names; the folder-name tags always stay.
+        /// </summary>
+        public async Task<PhotoTags> SetExtraTags(string id, IEnumerable<string?> tags)
+        {
+            var photo = ObjectId.TryParse(id, out _)
+                ? await _photosCollection.Find(p => p.Id == id).Project<Photo>(Builders<Photo>.Projection.Exclude(x => x.Thumbnail)).FirstOrDefaultAsync()
+                : null;
+            if (photo == null) throw new MyPhotoException($"Photo {id} is not found.", MyErrorCode.NotFound);
+
+            var folderTags = Util.GenerateTags(photo.Path ?? "");
+            var extra = tags.Select(t => Regex.Replace(t ?? "", @"\s+", " ").Trim().ToLowerInvariant())
+                .Where(t => t.Length > 0 && !folderTags.Contains(t, StringComparer.OrdinalIgnoreCase))
+                .Distinct().ToArray();
+            if (extra.Length > MaxExtraTags) throw new MyPhotoException($"At most {MaxExtraTags} tags besides the folder names.", MyErrorCode.BadRequest);
+            if (extra.Any(t => t.Length > MaxTagLength)) throw new MyPhotoException($"A tag can have at most {MaxTagLength} characters.", MyErrorCode.BadRequest);
+
+            var all = folderTags.Concat(extra).ToArray();
+            // Matches nothing if the photo moved meanwhile, so the move's folder tags are not overwritten.
+            var update = await _photosCollection.UpdateOneAsync(p => p.Id == id && p.Path == photo.Path, Builders<Photo>.Update.Set(p => p.Tags, all));
+            if (update.MatchedCount == 0) throw new MyPhotoException("The photo moved while its tags were being saved; try again.", MyErrorCode.General);
+            _logger.LogInformation($"Set the tags of photo {id}: {string.Join(", ", extra)}");
+            return new PhotoTags { Id = id, Tags = all };
+        }
+
         public async Task<Photo?> FindByPathAndName(string path, string fileName)
         {
             return await _photosCollection.Find(p => p.Path == path && p.FileName == fileName)

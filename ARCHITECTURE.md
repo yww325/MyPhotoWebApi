@@ -27,7 +27,7 @@
         - `MaxRequestsPerMinute`：调用模型的速率上限，默认每分钟 10 次（Google 免费层每分钟只允许少量请求）。同一实例的所有请求共用这个限速。
         - `ReasoningEffort`：默认 `minimal`，让思考 token（按输出计费）接近 0；厂商不支持时设为空字符串即可不发送。
 - **OData 路由**：挂载在 `/odata/v1` 前缀下，实体集为 `Photos` 和 `Folders`，元数据地址为 `/odata/v1/$metadata`。
-- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders` 三个控制器），包括上传 `POST /api/v1/Photos/upload`、目录树 `GET /api/v1/Folders/tree`、目录内容 `GET /api/v1/Photos/thumbs` 、删除照片 `DELETE /api/v1/Photos`、移动照片 `POST /api/v1/Photos/move-to`、AI 标签 `POST /api/v1/Photos/ai-tags` 和删除空目录 `DELETE /api/v1/Folders/empty`（见第 3 节）。
+- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders` 三个控制器），包括上传 `POST /api/v1/Photos/upload`、目录树 `GET /api/v1/Folders/tree`、目录内容 `GET /api/v1/Photos/thumbs` 、删除照片 `DELETE /api/v1/Photos`、移动照片 `POST /api/v1/Photos/move-to`、AI 标签 `POST /api/v1/Photos/ai-tags`、修改标签 `PUT /api/v1/Photos/tags` 和删除空目录 `DELETE /api/v1/Folders/empty`（见第 3 节）。
 - **健康检查**：`/health`，返回 `{"status":"ok","mongo":"ok"}`，会顺带检查 MongoDB 是否可用。
 - **原图**：由程序自己的静态文件中间件（`UseStaticFiles`）从 `RootFolder` 提供，路径为 `/File/<相对路径>`，支持 Range 请求，不提供目录列表。
 - **Swagger**：使用 **NSwag 14**（`AddOpenApiDocument` + `UseOpenApi` + `UseSwaggerUi`），生成 OpenAPI 3.0 文档。
@@ -90,9 +90,9 @@
 - 旧的 `PATCH /api/v1/Photos/move?folderId=...`（请求体为 id 数组）保持不变（`tags` 同样只替换目录名部分）：按目录 id 指定目标，不能移到根目录，重名时失败，遇到第一个失败就停止，只返回整体成功或失败（500）。
 
 ### tags 字段
-- `tags` 的前几项是照片所在目录按 `/` 切开、转成小写后的各段（入库和上传时生成），后面是 AI 标签等其他 tag。
+- `tags` 的前几项是照片所在目录按 `/` 切开、转成小写后的各段（入库和上传时生成），后面是其他 tag：AI 生成的和手动添加的，两者不作区分。
 - 移动照片时，新 `tags` = 新目录各段 + 旧 `tags` 中不属于旧目录各段的部分（不区分大小写、去重）。
-- 判断一张照片“有没有 AI 标签”的方法：`tags` 里有不属于当前目录各段的 tag。
+- 判断一张照片“有没有 AI 标签”的方法：`tags` 里有不属于当前目录各段的 tag（手动添加的也算）。目录 tag 不能删除；其他 tag 可以用 `PUT /api/v1/Photos/tags` 修改，AI 重新生成时也会把它们一起替换。
 - 限制：和目录名相同的 tag 只存一份，所以 AI 给出的 tag 恰好等于某一段目录名时不会额外保存，移出这个目录后也就没有了。
 
 ### AI 标签：`POST /api/v1/Photos/ai-tags`
@@ -103,6 +103,13 @@
 - 照片逐张处理，调用速率受 `MaxRequestsPerMinute` 限制，所以请求可能要几十秒。客户端应每次发少量 id（App 每批 5 张）。
 - 模型返回 429 或 5xx 时，按 `Retry-After` 或 Google 的 `retryDelay` 等待后重试一次，同时推迟本实例的所有后续调用。需要等待超过 60 秒（例如当天的额度用完）时不再调用，后面的照片直接返回 `failed`。
 - 每个 id 单独返回结果，部分失败时整个请求仍返回 200：`tagged`（`tags` 是完整的新 tags，`added` 是这次写入的 AI 标签）、`skipped`、`notFound` 或 `failed`（记录不变，`error` 说明原因，例如模型没有给出可用的 tag、限速，或打标签期间照片被移动了）。
+
+### 修改标签：`PUT /api/v1/Photos/tags`
+- 请求体为 JSON：`{"id":"6ad1...","tags":["暹罗猫","家里的猫"]}`；需要 `userPass`（缺少或错误时直接返回 401）。
+- 用 `tags` 替换这张照片除目录名以外的所有 tag，目录 tag 始终保留；空数组表示删掉所有非目录 tag。
+- 每个 tag 去掉首尾空白，连续空白合并成一个空格，转成小写；空的、重复的、与目录名相同的会被去掉。不过滤停用词。
+- 最多 20 个，每个最多 20 个字符，超过返回 400；没有这张照片返回 404；缺少 `id` 或 `tags` 返回 400。
+- 成功时返回 `{"id":"...","tags":[...]}`，`tags` 是完整的新 tags（目录 tag 在前）。保存期间照片被移动时返回 500，记录不变。
 
 ### 删除空目录：`DELETE /api/v1/Folders/empty?folderPath=...`
 - 需要 `userPass`（缺少或错误时直接返回 401）。只删除完全空的目录：数据库里没有照片和子目录，磁盘上的目录里也没有任何文件或子目录（没 ingest 的文件也算）。

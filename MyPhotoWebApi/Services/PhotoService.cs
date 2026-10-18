@@ -254,7 +254,6 @@ namespace MyPhotoWebApi.Services
             var folderReady = target == FolderService.RootFolderPath;
             var root = Path.GetFullPath(_myPhotoSettings.RootFolder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
             var directory = Path.Combine(root, target);
-            var tags = Util.GenerateTags(target);
 
             var result = new PhotoMoveResult { Folder = target };
             foreach (var id in ids.Distinct())
@@ -309,7 +308,7 @@ namespace MyPhotoWebApi.Services
                     var update = Builders<Photo>.Update
                         .Set(p => p.Path, target)
                         .Set(p => p.FileName, name)
-                        .Set(p => p.Tags, tags);
+                        .Set(p => p.Tags, Util.MoveTags(photo.Tags, photo.Path, target));
                     await _photosCollection.UpdateOneAsync(p => p.Id == id, update);
                     item.Status = MovePhotoResult.Moved;
                     item.SavedAs = name;
@@ -369,8 +368,8 @@ namespace MyPhotoWebApi.Services
                     _logger.LogInformation($"moving file {photo.FileName} from {photo.Path} to {folder.Path}");
                     File.Move(sourceFile, destinationFile);
 
+                    photo.Tags = Util.MoveTags(photo.Tags, photo.Path, folder.Path);
                     photo.Path = folder.Path;
-                    photo.Tags = Util.GenerateTags(photo.Path);
                     var replaceResult = await _photosCollection.ReplaceOneAsync(p => p.Id == photo.Id, photo);
                     if (replaceResult.IsAcknowledged)
                     {

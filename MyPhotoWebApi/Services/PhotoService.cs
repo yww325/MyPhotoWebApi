@@ -203,6 +203,7 @@ namespace MyPhotoWebApi.Services
                 .Include(x => x.MediaType)
                 .Include(x => x.Path)
                 .Include(x => x.DateTaken)
+                .Include(x => x.Tags)
                 .Include(x => x.Thumbnail)
                 .Include(x => x.IsPrivate);
             var docs = (await _photosCollection.Find(Builders<Photo>.Filter.In(x => x.Id, pageIds))

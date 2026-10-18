@@ -72,7 +72,7 @@
 - `recursive` 默认为 `false`，只列这一层；为 `true` 时同时列出所有子目录里的文件，并整体排序、分页（`Trip` 不会匹配同级的 `Trip2`）。
 - `orderBy` 可以是 `date`（拍摄时间，默认）、`name`（文件名，不区分大小写）或 `size`（文件大小），区分大小写，其他取值返回 400；`descending` 默认为 `true`。不传新参数时与旧版行为相同（只列这一层，按拍摄时间倒序）。
 - 响应头 `X-Total-Count` 是符合条件的文件总数，客户端可以据此显示滚动条和占位，按需分页加载。
-- 每项包含 `id`、`fileName`、`mediaType`（`photo`、`video` 或 `sound`）、`path`、`dateTaken`、`thumbnail`（Base64，可能为空）、`isPrivate` 和 `size`（磁盘上的字节数，文件不存在时为空）。
+- 每项包含 `id`、`fileName`、`mediaType`（`photo`、`video` 或 `sound`）、`path`、`dateTaken`、`tags`（目录 tag 在前，后面是 AI 或手动添加的 tag）、`thumbnail`（Base64，可能为空）、`isPrivate` 和 `size`（磁盘上的字节数，文件不存在时为空）。
 - 文件大小不存数据库，每次从磁盘读取。排序在内存中完成，只为当前页读取缩略图；排序值相同的文件再按文件名、目录和 id 排，翻页不会重复或漏掉。实测 1.7 万个文件全部排序约 0.2 秒/页。
 - 不带正确 `userPass` 时不返回私密照片，总数也不计入。
 

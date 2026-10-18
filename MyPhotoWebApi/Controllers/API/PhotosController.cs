@@ -174,6 +174,7 @@ namespace MyPhotoWebApi.Controllers.API
         /// holds the number of matching files. orderBy is "date" (default), "name" or "size"; descending defaults to true;
         /// recursive also lists the files of all subfolders and orders them together.
         /// pathPrefix is the folder path; empty or missing means the root folder.
+        /// tags filters by tag: words separated by spaces, each of which must be part of one of the file's tags (ignoring case).
         /// </summary>
         [HttpGet("thumbs")]
         [ProducesResponseType(StatusCodes.Status200OK)]
@@ -186,11 +187,12 @@ namespace MyPhotoWebApi.Controllers.API
             int skip = 0,
             string orderBy = "date",
             bool descending = true,
-            bool recursive = false)
+            bool recursive = false,
+            string? tags = null)
         {
             if (!PhotoService.ThumbSortKeys.Contains(orderBy)) return BadRequest($"orderBy must be one of: {string.Join(", ", PhotoService.ThumbSortKeys)}");
             // We do NOT use OData $select here because it triggers Mongo LINQ translation errors.
-            var (page, total) = await _photoService.GetThumbPage(userPass, pathPrefix, top, skip, orderBy, descending, recursive);
+            var (page, total) = await _photoService.GetThumbPage(userPass, pathPrefix, top, skip, orderBy, descending, recursive, tags);
             Response.Headers["X-Total-Count"] = total.ToString();
             return Ok(page);
         }

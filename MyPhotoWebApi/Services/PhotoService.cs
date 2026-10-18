@@ -120,8 +120,9 @@ namespace MyPhotoWebApi.Services
         /// <summary>
         /// One page of the files in a folder (and, when <paramref name="recursive"/>, in all its subfolders) in the
         /// requested order, plus the total number of files, so a client can page through them and size its list.
+        /// With <paramref name="tags"/> (words separated by spaces) only files whose tags contain every word are listed.
         /// </summary>
-        public async Task<(List<PhotoThumb> Page, int Total)> GetThumbPage(string userPass, string pathPrefix, int top, int skip, string orderBy = "date", bool descending = true, bool recursive = false)
+        public async Task<(List<PhotoThumb> Page, int Total)> GetThumbPage(string userPass, string pathPrefix, int top, int skip, string orderBy = "date", bool descending = true, bool recursive = false, string? tags = null)
         {
             // Dedicated endpoint path: avoids OData $select projection, which doesn't translate through Mongo LINQ.
             if (top <= 0) top = 100;
@@ -136,6 +137,11 @@ namespace MyPhotoWebApi.Services
                     : Builders<Photo>.Filter.Eq(x => x.Path, pathPrefix) |
                       Builders<Photo>.Filter.Regex(x => x.Path, new BsonRegularExpression("^" + Regex.Escape(pathPrefix + "/"))))
                 : Builders<Photo>.Filter.Eq(x => x.Path, pathPrefix);
+            // Each word must be part of at least one tag, ignoring case, so "猫" finds "暹罗猫" too.
+            foreach (var word in (tags ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Distinct())
+            {
+                filter &= Builders<Photo>.Filter.Regex("tags", new BsonRegularExpression(Regex.Escape(word), "i"));
+            }
             if (userPass != Startup.HashedUserPass)
             {
                 filter &= Builders<Photo>.Filter.Eq(x => x.IsPrivate, false);

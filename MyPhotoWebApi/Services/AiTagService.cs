@@ -157,6 +157,8 @@ namespace MyPhotoWebApi.Services
         private async Task<string[]> AskModel(byte[] image, CancellationToken ct)
         {
             var mime = image.Length > 4 && image[0] == 0x89 && image[1] == 0x50 ? "image/png" : "image/jpeg";
+            var imageUrl = new JObject { ["url"] = $"data:{mime};base64,{Convert.ToBase64String(image)}" };
+            if (!string.IsNullOrWhiteSpace(_settings.Detail)) imageUrl["detail"] = _settings.Detail;
             var body = new JObject
             {
                 ["model"] = _settings.Model,
@@ -171,7 +173,7 @@ namespace MyPhotoWebApi.Services
                             new JObject
                             {
                                 ["type"] = "image_url",
-                                ["image_url"] = new JObject { ["url"] = $"data:{mime};base64,{Convert.ToBase64String(image)}" },
+                                ["image_url"] = imageUrl,
                             },
                         },
                     },
@@ -181,6 +183,7 @@ namespace MyPhotoWebApi.Services
                     "\"properties\":{\"tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"tags\"]}}}"),
             };
             if (!string.IsNullOrWhiteSpace(_settings.ReasoningEffort)) body["reasoning_effort"] = _settings.ReasoningEffort;
+            if (!string.IsNullOrWhiteSpace(_settings.Thinking)) body["thinking"] = new JObject { ["type"] = _settings.Thinking };
 
             var client = _httpClientFactory.CreateClient(nameof(AiTagService));
             for (var attempt = 0; ; attempt++)

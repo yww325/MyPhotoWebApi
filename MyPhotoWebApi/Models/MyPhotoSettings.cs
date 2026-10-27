@@ -22,5 +22,9 @@
         public int MaxRequestsPerMinute { get; set; } = 10;
         /// <summary>Sent as reasoning_effort; "minimal" keeps thinking tokens, which are billed as output, near zero.</summary>
         public string? ReasoningEffort { get; set; } = "minimal";
+        /// <summary>Sent as thinking.type; "disabled" skips thinking, which tagging does not need. Left out when blank.</summary>
+        public string? Thinking { get; set; }
+        /// <summary>Sent as image_url.detail; "low" bills a thumbnail as a few hundred tokens instead of a few thousand. Left out when blank.</summary>
+        public string? Detail { get; set; }
     }
 }

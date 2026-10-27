@@ -10,7 +10,7 @@
 | 1 | `/MyPhotos/` | `127.0.0.1:5000` | `MyPhotos` | `/home/yww/FtpRoot/PicRootFolder` |
 | 2 | `/MyPhotos2/` | `127.0.0.1:5001` | `MyPhotos2` | `/home/yww/FtpRoot/PicRootFolder2` |
 
-本仓库是实例 1 的源码。实例 2 运行的是 `/home/yww/Coding/MyPhotoWebApi2` 下单独的一份代码。
+本仓库是实例 1 的源码。实例 2 运行的是同一份代码的独立构建产物（当前为 `/home/yww/deploy/myphoto5001/cf0c3f9-minimax`）。
 
 ## 2. 后端配置 (.NET 8.0)
 - **监听地址**：`http://127.0.0.1:5000`（只监听本机 IPv4，由启动参数 `--urls` 指定）。
@@ -167,16 +167,29 @@ location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
 服务以 **systemd 用户服务**的形式运行（用户 `yww`，已开启 linger，开机即自动启动，无需登录）：
 
 - **实例 1**：`~/.config/systemd/user/myphoto5000.service`
-    - 运行 `.../MyPhotoWebApi/publish/MyPhotoWebApi --urls http://127.0.0.1:5000`，工作目录为 `publish/`。
+    - 运行 `/home/yww/deploy/myphoto5000/cf0c3f9-minimax/MyPhotoWebApi --urls http://127.0.0.1:5000`，工作目录为 `/home/yww/deploy/myphoto5000/cf0c3f9-minimax`。
     - `Restart=on-failure`，`RestartSec=3`，`WantedBy=default.target`。
-- **实例 2**：`myphoto5001.service`，运行 `/home/yww/Coding/MyPhotoWebApi2/publish`，监听 `127.0.0.1:5001`。
+- **实例 2**：`myphoto5001.service`，运行 `/home/yww/deploy/myphoto5001/cf0c3f9-minimax`，监听 `127.0.0.1:5001`。
 - **运行时更新自动重启**：`myphoto-runtime-watch.path` 监视 .NET 运行时目录，一旦有变化，就执行 `/usr/local/bin/restart-on-runtime-change.sh` 重启两个实例。
 - **控制命令**（以 `yww` 用户执行，不需要 sudo）：
     - 启动：`systemctl --user start myphoto5000`
     - 重启：`systemctl --user restart myphoto5000`
     - 状态：`systemctl --user status myphoto5000`
     - 日志：`journalctl --user -u myphoto5000 -f`
-- 旧的系统级服务 `myphotoapi.service` 已停用，只剩备份文件 `/etc/systemd/system/myphotoapi.service.bak.2026-04-26_025445`。
+- 旧的系统级服务 `myphotoapi.service` 已停用，只剩备份文件 `/etc/systemd/system/myphotoapi.service.bak.2026-04-26_025445` 和 `/etc/systemd/system/myphotoapi2.service.bak.2026-04-26_023008`。
+
+### 部署目录约定与配置注入
+
+- **构建产物目录**：`/home/yww/deploy/<instance>/<commit-sha>[-<tag>]`，`<instance>` 为 `myphoto5000` / `myphoto5001`。
+    当前两个实例跑的是同一份构建 `/home/yww/deploy/myphoto{5000,5001}/cf0c3f9-minimax`（`<commit-sha>` 是基线 commit，后缀表示在其之上追加了改动构建出的版本）。
+    旧目录一律保留以便回滚；回滚 = 改 drop-in 里的路径 + 重启。
+- **base unit 与 drop-in 的分工**：
+    - base unit（`~/.config/systemd/user/myphoto500{0,1}.service`）的 `WorkingDirectory` / `ExecStart` 直接指向 deploy 目录。**即使 drop-in 丢失，服务仍指向正确的构建**，不会回退到工作区里的旧 `publish/`。
+    - drop-in（`myphoto500{0,1}.service.d/feature-deploy.conf`）只负责注入 `MyPhotoSettings__Vlm__*` 这 7 个环境变量（模型名、Base URL、key 文件路径等）。**不能删** —— 生产 `appsettings.json` 故意不含 `Vlm` 段，删掉等于丢掉全部 VLM 配置，AI 打标会静默失效（`/api/v1/Photos/ai-tags` 恒回 503）。
+- **配置来源优先级**（`WebHost.CreateDefaultBuilder`，后面的覆盖前面的）：
+    `appsettings.json`（读自 ContentRoot，即进程工作目录）→ `appsettings.{Environment}.json` → user secrets（仅 Development）→ 环境变量（`__` 作层级分隔符，`MyPhotoSettings__Vlm__Model` ≡ `MyPhotoSettings:Vlm:Model`）→ 命令行参数。
+- **改配置的正规做法**：改 drop-in，然后 `systemctl --user daemon-reload` + `systemctl --user restart myphoto5001`。
+    不要手改发布目录里的 `appsettings.json`（下次 publish 会被覆盖），也不要改 base unit 的路径（base unit 指向 deploy 目录，正是为了让 drop-in 失效时也能正确回退）。
 
 ## 6. 访问路径汇总
 域名 `yww325.eu.org` 解析到本机公网 IP `20.214.10.34`。下面的路径对 `https://yww325.eu.org` 和 `http://20.214.10.34` 都适用：

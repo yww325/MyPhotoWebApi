@@ -20,14 +20,16 @@ namespace MyPhotoWebApi.Controllers.API
     {
         private readonly PhotoService _photoService;
         private readonly FileIngestionService _fileIngestionService;
+        private readonly AiTagService _aiTagService;
 
         // Nginx allows 1 GB per request (client_max_body_size 1G); match it here.
         private const long MaxUploadBytes = 1L << 30;
 
-        public PhotosController(PhotoService photoService, FileIngestionService fileIngestionService)
+        public PhotosController(PhotoService photoService, FileIngestionService fileIngestionService, AiTagService aiTagService)
         {
             _photoService = photoService; 
             _fileIngestionService = fileIngestionService;
+            _aiTagService = aiTagService;
         }
 
         /// <summary>
@@ -120,6 +122,57 @@ namespace MyPhotoWebApi.Controllers.API
         }
 
         /// <summary>
+        /// Asks the vision model for up to 5 tags per photo and stores them after the folder-name tags. Photos that already
+        /// have AI tags are skipped unless regenerate is true, which replaces them. Send {"ids": [...], "regenerate": false},
+        /// at most 50 ids; calls to the model are paced, so a request can take a while. Every id gets its own result:
+        /// tagged, skipped, notFound or failed. Returns 503 when no API key is configured.
+        /// </summary>
+        [HttpPost("ai-tags")]
+        [RequireUserPass]
+        [ProducesResponseType(typeof(AiTagResult), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+        public async Task<IActionResult> AiTags([FromHeader, Required, BindRequired] string userPass, [FromBody] AiTagRequest request, CancellationToken ct)
+        {
+            if (request?.Ids == null || request.Ids.Length == 0) return BadRequest("need at least one photo id");
+            if (request.Ids.Length > AiTagService.MaxIdsPerRequest) return BadRequest($"at most {AiTagService.MaxIdsPerRequest} photo ids per request");
+            if (!_aiTagService.IsConfigured) return StatusCode(StatusCodes.Status503ServiceUnavailable, "AI tagging is not configured on this server");
+            return await Util.ResponseHelper(() => _aiTagService.TagPhotos(request.Ids, request.Regenerate, ct));
+        }
+
+        /// <summary>
+        /// Replaces a photo's tags other than its folder names (AI or hand-added) with the given ones; the folder-name tags
+        /// always stay. Send {"id": "...", "tags": [...]}, at most 20 tags of up to 20 characters; an empty array removes
+        /// them all. Returns the photo's id and all its tags.
+        /// </summary>
+        [HttpPut("tags")]
+        [RequireUserPass]
+        [ProducesResponseType(typeof(PhotoTags), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> SetTags([FromHeader, Required, BindRequired] string userPass, [FromBody] PhotoTags request)
+        {
+            if (string.IsNullOrEmpty(request?.Id) || request.Tags == null) return BadRequest("need a photo id and a tags array");
+            return await Util.ResponseHelper(() => _photoService.SetExtraTags(request.Id, request.Tags));
+        }
+
+        /// <summary>
+        /// The technical details of a photo's file, read from the file: size, dimensions, duration, camera, exposure, the EXIF
+        /// capture time and place. Returns labelled values in display order, only the ones the file has.
+        /// </summary>
+        [HttpGet("details")]
+        [RequireUserPass]
+        [ProducesResponseType(typeof(PhotoDetails), StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> Details([FromHeader, Required, BindRequired] string userPass, [Required, BindRequired] string id)
+        {
+            return await Util.ResponseHelper(() => _photoService.GetDetails(id));
+        }
+
+        /// <summary>
         /// Older move by target folder id; stops at the first failure and reports only overall success.
         /// Kept unchanged for existing clients; new clients should use move-to.
         /// </summary>
@@ -152,6 +205,7 @@ namespace MyPhotoWebApi.Controllers.API
         /// holds the number of matching files. orderBy is "date" (default), "name" or "size"; descending defaults to true;
         /// recursive also lists the files of all subfolders and orders them together.
         /// pathPrefix is the folder path; empty or missing means the root folder.
+        /// tags filters by tag: words separated by spaces, each of which must be part of one of the file's tags (ignoring case).
         /// </summary>
         [HttpGet("thumbs")]
         [ProducesResponseType(StatusCodes.Status200OK)]
@@ -164,11 +218,12 @@ namespace MyPhotoWebApi.Controllers.API
             int skip = 0,
             string orderBy = "date",
             bool descending = true,
-            bool recursive = false)
+            bool recursive = false,
+            string? tags = null)
         {
             if (!PhotoService.ThumbSortKeys.Contains(orderBy)) return BadRequest($"orderBy must be one of: {string.Join(", ", PhotoService.ThumbSortKeys)}");
             // We do NOT use OData $select here because it triggers Mongo LINQ translation errors.
-            var (page, total) = await _photoService.GetThumbPage(userPass, pathPrefix, top, skip, orderBy, descending, recursive);
+            var (page, total) = await _photoService.GetThumbPage(userPass, pathPrefix, top, skip, orderBy, descending, recursive, tags);
             Response.Headers["X-Total-Count"] = total.ToString();
             return Ok(page);
         }

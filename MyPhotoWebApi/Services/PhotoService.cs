@@ -75,6 +75,51 @@ namespace MyPhotoWebApi.Services
             return true;
         }
 
+        public const int MaxExtraTags = 20;
+        public const int MaxTagLength = 20;
+
+        /// <summary>
+        /// Replaces a photo's tags other than its folder names (AI or hand-added) with <paramref name="tags"/>, trimmed,
+        /// lower-cased and without repeats or folder names; the folder-name tags always stay.
+        /// </summary>
+        public async Task<PhotoTags> SetExtraTags(string id, IEnumerable<string?> tags)
+        {
+            var photo = ObjectId.TryParse(id, out _)
+                ? await _photosCollection.Find(p => p.Id == id).Project<Photo>(Builders<Photo>.Projection.Exclude(x => x.Thumbnail)).FirstOrDefaultAsync()
+                : null;
+            if (photo == null) throw new MyPhotoException($"Photo {id} is not found.", MyErrorCode.NotFound);
+
+            var folderTags = Util.GenerateTags(photo.Path ?? "");
+            var extra = tags.Select(t => Regex.Replace(t ?? "", @"\s+", " ").Trim().ToLowerInvariant())
+                .Where(t => t.Length > 0 && !folderTags.Contains(t, StringComparer.OrdinalIgnoreCase))
+                .Distinct().ToArray();
+            if (extra.Length > MaxExtraTags) throw new MyPhotoException($"At most {MaxExtraTags} tags besides the folder names.", MyErrorCode.BadRequest);
+            if (extra.Any(t => t.Length > MaxTagLength)) throw new MyPhotoException($"A tag can have at most {MaxTagLength} characters.", MyErrorCode.BadRequest);
+
+            var all = folderTags.Concat(extra).ToArray();
+            // Matches nothing if the photo moved meanwhile, so the move's folder tags are not overwritten.
+            var update = await _photosCollection.UpdateOneAsync(p => p.Id == id && p.Path == photo.Path, Builders<Photo>.Update.Set(p => p.Tags, all));
+            if (update.MatchedCount == 0) throw new MyPhotoException("The photo moved while its tags were being saved; try again.", MyErrorCode.General);
+            _logger.LogInformation($"Set the tags of photo {id}: {string.Join(", ", extra)}");
+            return new PhotoTags { Id = id, Tags = all };
+        }
+
+        /// <summary>The technical details of a photo's file, read from the file itself.</summary>
+        public async Task<PhotoDetails> GetDetails(string id)
+        {
+            var photo = ObjectId.TryParse(id, out _)
+                ? await _photosCollection.Find(p => p.Id == id).Project<Photo>(Builders<Photo>.Projection.Exclude(x => x.Thumbnail)).FirstOrDefaultAsync()
+                : null;
+            if (photo == null) throw new MyPhotoException($"Photo {id} is not found.", MyErrorCode.NotFound);
+            var root = Path.GetFullPath(_myPhotoSettings.RootFolder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var file = Path.GetFullPath(Path.Combine(root, photo.Path ?? "", photo.FileName ?? ""));
+            if (!file.StartsWith(root, StringComparison.Ordinal) || !File.Exists(file))
+            {
+                throw new MyPhotoException("The photo's file is missing on disk.", MyErrorCode.NotFound);
+            }
+            return new PhotoDetails { Id = id, Items = PhotoDetailsReader.Read(file) };
+        }
+
         public async Task<Photo?> FindByPathAndName(string path, string fileName)
         {
             return await _photosCollection.Find(p => p.Path == path && p.FileName == fileName)
@@ -120,8 +165,9 @@ namespace MyPhotoWebApi.Services
         /// <summary>
         /// One page of the files in a folder (and, when <paramref name="recursive"/>, in all its subfolders) in the
         /// requested order, plus the total number of files, so a client can page through them and size its list.
+        /// With <paramref name="tags"/> (words separated by spaces) only files whose tags contain every word are listed.
         /// </summary>
-        public async Task<(List<PhotoThumb> Page, int Total)> GetThumbPage(string userPass, string pathPrefix, int top, int skip, string orderBy = "date", bool descending = true, bool recursive = false)
+        public async Task<(List<PhotoThumb> Page, int Total)> GetThumbPage(string userPass, string pathPrefix, int top, int skip, string orderBy = "date", bool descending = true, bool recursive = false, string? tags = null)
         {
             // Dedicated endpoint path: avoids OData $select projection, which doesn't translate through Mongo LINQ.
             if (top <= 0) top = 100;
@@ -136,6 +182,11 @@ namespace MyPhotoWebApi.Services
                     : Builders<Photo>.Filter.Eq(x => x.Path, pathPrefix) |
                       Builders<Photo>.Filter.Regex(x => x.Path, new BsonRegularExpression("^" + Regex.Escape(pathPrefix + "/"))))
                 : Builders<Photo>.Filter.Eq(x => x.Path, pathPrefix);
+            // Each word must be part of at least one tag, ignoring case, so "猫" finds "暹罗猫" too.
+            foreach (var word in (tags ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Distinct())
+            {
+                filter &= Builders<Photo>.Filter.Regex("tags", new BsonRegularExpression(Regex.Escape(word), "i"));
+            }
             if (userPass != Startup.HashedUserPass)
             {
                 filter &= Builders<Photo>.Filter.Eq(x => x.IsPrivate, false);
@@ -168,6 +219,7 @@ namespace MyPhotoWebApi.Services
                 .Include(x => x.MediaType)
                 .Include(x => x.Path)
                 .Include(x => x.DateTaken)
+                .Include(x => x.Tags)
                 .Include(x => x.Thumbnail)
                 .Include(x => x.IsPrivate);
             var docs = (await _photosCollection.Find(Builders<Photo>.Filter.In(x => x.Id, pageIds))
@@ -254,7 +306,6 @@ namespace MyPhotoWebApi.Services
             var folderReady = target == FolderService.RootFolderPath;
             var root = Path.GetFullPath(_myPhotoSettings.RootFolder).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
             var directory = Path.Combine(root, target);
-            var tags = Util.GenerateTags(target);
 
             var result = new PhotoMoveResult { Folder = target };
             foreach (var id in ids.Distinct())
@@ -309,7 +360,7 @@ namespace MyPhotoWebApi.Services
                     var update = Builders<Photo>.Update
                         .Set(p => p.Path, target)
                         .Set(p => p.FileName, name)
-                        .Set(p => p.Tags, tags);
+                        .Set(p => p.Tags, Util.MoveTags(photo.Tags, photo.Path, target));
                     await _photosCollection.UpdateOneAsync(p => p.Id == id, update);
                     item.Status = MovePhotoResult.Moved;
                     item.SavedAs = name;
@@ -369,8 +420,8 @@ namespace MyPhotoWebApi.Services
                     _logger.LogInformation($"moving file {photo.FileName} from {photo.Path} to {folder.Path}");
                     File.Move(sourceFile, destinationFile);
 
+                    photo.Tags = Util.MoveTags(photo.Tags, photo.Path, folder.Path);
                     photo.Path = folder.Path;
-                    photo.Tags = Util.GenerateTags(photo.Path);
                     var replaceResult = await _photosCollection.ReplaceOneAsync(p => p.Id == photo.Id, photo);
                     if (replaceResult.IsAcknowledged)
                     {

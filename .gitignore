@@ -63,3 +63,5 @@ obj/
 
 # Build output (deployed on the server, not versioned)
 publish/
+# Local SDK / API keys (contains a Google Maps API key - never commit)
+local.properties

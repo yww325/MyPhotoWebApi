@@ -13,6 +13,10 @@
 ```bash
 cd /home/yww/Coding/MyPhotoWebApi-feature
 
+# 0) 体检：只读审计「现在正在跑的东西」（不需要 --target，什么都不改）
+bash scripts/deploy-instance.sh --check --instance 5000
+bash scripts/deploy-instance.sh --check --instance 5001
+
 # 1) 先做只读预演（不改任何东西）
 bash scripts/deploy-instance.sh --instance 5000 --target <commit-sha> --build --dry-run
 
@@ -25,6 +29,12 @@ bash scripts/deploy-instance.sh --instance 5000 --rollback
 
 `--instance` 取 `5000` / `1`（实例 1）或 `5001` / `2`（实例 2）。
 `--target` 是**目标部署目录名**，通常就是 commit 的短 sha（如 `52cc9e0`）；也可以带后缀（如 `52cc9e0-minimax`），后缀只作标签，脚本会用 DLL 里内嵌的 `1.0.0+<commit-sha>` 独立复核它。
+
+`--check` 与 `--dry-run` 的区别：`--dry-run` 预演**一次将要发生的部署**（需要一个 `--target`）；
+`--check` 审计**当前已经部署并在运行的实例**（不需要 `--target`）。`--check` 是只读的：
+不复制文件、不改 drop-in、不重启服务，只读取 drop-in / `appsettings.json` / `/proc/<pid>` 并
+发几个 HTTP GET，然后按同样的四个阶段逐条打印 PASS/FAIL，最后以非零码退出表示有断言失败。
+对方实例的端口用 `--peer-port` 传入（默认是另一个实例），所以 5000 和 5001 走同一份逻辑。
 
 ---
 

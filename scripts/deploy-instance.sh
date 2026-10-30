@@ -63,6 +63,10 @@ readonly INST_5000_DB="MyPhotos"
 readonly INST_5001_DB="MyPhotos2"
 readonly INST_5000_ROOT="/home/yww/FtpRoot/PicRootFolder"
 readonly INST_5001_ROOT="/home/yww/FtpRoot/PicRootFolder2"
+# Location of the password file each instance authenticates against. These
+# are PATHS, never the password itself: the file is never read or printed.
+readonly INST_5000_USERPASS="/home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/UserPass.txt"
+readonly INST_5001_USERPASS="/home/yww/UserPass2.txt"
 
 DRY_RUN=0
 FORCE=0
@@ -83,6 +87,7 @@ UNIT_NAME=""
 PORT=""
 EXPECTED_DB=""
 EXPECTED_ROOT=""
+EXPECTED_USERPASS=""
 OTHER_INSTANCE=""
 OTHER_PORT=""
 OTHER_ROOT=""
@@ -91,6 +96,10 @@ OTHER_ROOT_DIR=""
 ROLLBACK_TO=""
 FAILURES=0
 CHECKS=0
+CHECK_MODE=0
+PEER_PORT_ARG=""
+PEER_PORT=""
+LIVE_DIR=""
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -170,6 +179,13 @@ OPTIONS
                         afterwards unless --keep-build-dir is given.
   --dry-run             Run every READ-ONLY check and print what WOULD happen.
                         Mutates nothing: no copy, no drop-in write, no restart.
+  --check               READ-ONLY audit of the LIVE deployment. Runs all four
+                        stages of assertions against what is currently
+                        deployed and reports PASS/FAIL for each. Takes no
+                        --target. Mutates nothing.
+  --peer-port <port>    TCP port of the peer instance used by --check for the
+                        isolation assertions. Default: the other instance
+                        (5000 <-> 5001). Never hardcoded per instance.
   --force               Allow overwriting an existing target deploy directory.
   --skip-restart        Do not run `systemctl --user restart` (stage 3 checks
                         that require a restarted process are then skipped).
@@ -195,6 +211,10 @@ SAFETY
   * Secret values (API keys, password files) are never read or printed.
 
 EXAMPLES
+  # Read-only audit of what is running right now (no --target needed).
+  scripts/deploy-instance.sh --check --instance 5000
+  scripts/deploy-instance.sh --check --instance 5001
+
   # Read-only rehearsal of a deploy to instance 5000.
   scripts/deploy-instance.sh --instance 5000 --target 52cc9e0 --dry-run
 
@@ -221,6 +241,8 @@ parse_args() {
       --source-dir)      SOURCE_DIR_ARG="${2:-}"; shift 2 ;;
       --build)           BUILD=1; shift ;;
       --dry-run)         DRY_RUN=1; shift ;;
+      --check)           CHECK_MODE=1; shift ;;
+      --peer-port)       PEER_PORT_ARG="${2:-}"; shift 2 ;;
       --force)           FORCE=1; shift ;;
       --skip-restart)    SKIP_RESTART=1; shift ;;
       --rollback)        ROLLBACK=1; shift ;;
@@ -365,15 +387,26 @@ require_tools() {
 resolve_instance() {
   case "$INSTANCE" in
     5000|1) PORT="${INST_5000_PORT}"; EXPECTED_DB="${INST_5000_DB}"; EXPECTED_ROOT="${INST_5000_ROOT}"
-            OTHER_INSTANCE=5001; OTHER_PORT="${INST_5001_PORT}"; OTHER_DB="${INST_5001_DB}"; OTHER_ROOT="${INST_5001_ROOT}" ;;
+              EXPECTED_USERPASS="${INST_5000_USERPASS}"
+              OTHER_INSTANCE=5001; OTHER_PORT="${INST_5001_PORT}"; OTHER_DB="${INST_5001_DB}"; OTHER_ROOT="${INST_5001_ROOT}" ;;
     5001|2) PORT="${INST_5001_PORT}"; EXPECTED_DB="${INST_5001_DB}"; EXPECTED_ROOT="${INST_5001_ROOT}"
-            OTHER_INSTANCE=5000; OTHER_PORT="${INST_5000_PORT}"; OTHER_DB="${INST_5000_DB}"; OTHER_ROOT="${INST_5000_ROOT}" ;;
-    "")     die "--instance is required (5000|5001|1|2)." ;;
-    *)      die "unknown instance '${INSTANCE}' (expected 5000|5001|1|2)." ;;
-  esac
+              EXPECTED_USERPASS="${INST_5001_USERPASS}"
+              OTHER_INSTANCE=5000; OTHER_PORT="${INST_5000_PORT}"; OTHER_DB="${INST_5000_DB}"; OTHER_ROOT="${INST_5000_ROOT}" ;;
+      "")     die "--instance is required (5000|5001|1|2)." ;;
+      *)      die "unknown instance '${INSTANCE}' (expected 5000|5001|1|2)." ;;
+    esac
   UNIT_NAME="myphoto${PORT}.service"
   DEPLOY_ROOT="${DEPLOY_BASE}/myphoto${PORT}"
   DROPIN="${SYSTEMD_USER_DIR}/${UNIT_NAME}.d/feature-deploy.conf"
+
+  # The peer instance's port is a PARAMETER, never hardcoded per instance:
+  # 5000 and 5001 run through exactly the same code path. An explicit
+  # --peer-port overrides the derived default (used by --check to point at
+  # a second instance that is not the "other" one).
+  PEER_PORT="${PEER_PORT_ARG:-${OTHER_PORT}}"
+  if ! [[ "$PEER_PORT" =~ ^[0-9]+$ ]] || [[ "$PEER_PORT" == "$PORT" ]]; then
+    die "--peer-port must be a TCP port different from this instance's port (${PORT})."
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -1219,10 +1252,525 @@ run_rollback() {
 }
 
 # ---------------------------------------------------------------------------
+# --check : READ-ONLY audit of the LIVE deployment
+# ---------------------------------------------------------------------------
+# --check simulates ONE deployment of the four stages against the state that
+# is currently RUNNING, and reports pass/fail for every assertion. It never
+# writes, copies, restarts or deletes anything:
+#
+#   * it reads the live deploy dir from the drop-in's WorkingDirectory;
+#   * it compares that dir's file-level sha256 manifest against a reference
+#     (the sibling instance's dir for the same commit, or --source-dir);
+#   * it verifies the live PROCESS via /proc/<pid>/{cwd,exe,maps};
+#   * it exercises the HTTP endpoints for liveness and root isolation.
+#
+# The peer instance's port is a parameter (--peer-port), so 5000 and 5001 run
+# through exactly the same code path.
+
+# The live deploy dir of an instance: the drop-in's WorkingDirectory.
+live_deploy_dir() {
+  local unit="$1"
+  local dropin="${SYSTEMD_USER_DIR}/${unit}.d/feature-deploy.conf"
+  dropin_value "$dropin" "WorkingDirectory" 2>/dev/null || true
+}
+
+# The peer unit name for a given port.
+peer_unit_for_port() {
+  printf 'myphoto%s.service' "$1"
+}
+
+# The photo root the PEER instance actually serves, read from the peer
+# unit's own deployed appsettings.json (authoritative: it is what the peer
+# will really answer for), falling back to the instance table when the
+# peer's config cannot be read.
+peer_root_dir() {
+  local port="$1" peer_unit peer_dir val
+  peer_unit="$(peer_unit_for_port "$port")"
+  peer_dir="$(live_deploy_dir "$peer_unit")"
+  if [[ -n "$peer_dir" && -f "${peer_dir}/appsettings.json" ]]; then
+    val="$(json_get_opt "${peer_dir}/appsettings.json" "MyPhotoSettings.RootFolder" || true)"
+    if [[ -n "$val" ]]; then printf '%s' "$val"; return 0; fi
+  fi
+  case "$port" in
+    5000) printf '%s' "$INST_5000_ROOT" ;;
+    5001) printf '%s' "$INST_5001_ROOT" ;;
+    *)    printf '' ;;
+  esac
+}
+
+# Pick a file that exists under ONE root but NOT under the other, and whose
+# extension the static-file middleware actually serves (.db/.prp/.ini are
+# NOT served -> they would answer 404 and fake an isolation failure).
+# $1 = own root, $2 = peer root. Echoes the RELATIVE path (no leading ./).
+find_exclusive_probe() {
+  local own="$1" peer="$2" rel
+  local a b
+  a="$(mktemp)"; b="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -f '$a' '$b'" RETURN
+  ( cd "$own" && find . -type f -printf '%P\n' 2>/dev/null | LC_ALL=C sort ) > "$a" || true
+  ( cd "$peer" && find . -type f -printf '%P\n' 2>/dev/null | LC_ALL=C sort ) > "$b" || true
+  rel="$(comm -23 "$a" "$b" \
+        | grep -Ei '\.(jpg|jpeg|png|gif|bmp|webp|mp4|webm|avi|mov|3gp|mp3|wav)$' \
+        | head -n 1 || true)"
+  [[ -n "$rel" ]] || return 1
+  printf '%s' "$rel"
+}
+
+# --- Stage 1 (check mode): the live deploy dir is the expected build ------
+check_stage1_live() {
+  section "STAGE 1 — PRE-DEPLOY ASSERTIONS (live deployment)"
+
+  LIVE_DIR="$(live_deploy_dir "$UNIT_NAME")"
+  if [[ -n "$LIVE_DIR" && -d "$LIVE_DIR" ]]; then
+    check 1 "live deploy dir exists: $(show "$LIVE_DIR")"
+  else
+    check 0 "live deploy dir does not exist: $(show "$LIVE_DIR")"
+    fatal "the drop-in points at a missing directory; fix that before deploying."
+  fi
+
+  # The deploy dir NAME is the only version marker (a publish output has no
+  # version file). It must resolve to a commit, and the DLL embedded in the
+  # dir must carry that very commit.
+  local label base full_sha
+  label="$(basename "$LIVE_DIR")"
+  base="${label%%-*}"
+  if [[ "$base" =~ ^[0-9a-f]{7,40}$ ]]; then
+    check 1 "deploy dir name $(show "$label") is sha-shaped (${base})"
+  else
+    check 0 "deploy dir name $(show "$label") is not sha-shaped"
+  fi
+  full_sha="$(git -C "$REPO_ROOT" rev-parse --verify -q "${base}^{commit}" 2>/dev/null || true)"
+  if [[ -n "$full_sha" ]]; then
+    check 1 "dir name $(show "$base") resolves to commit ${full_sha}"
+  else
+    check 0 "dir name $(show "$base") does not resolve to any commit in ${REPO_ROOT}"
+  fi
+
+  local dll_sha
+  dll_sha="$(dll_version_sha "${LIVE_DIR}/MyPhotoWebApi.dll" || true)"
+  if [[ -n "$dll_sha" ]]; then
+    check 1 "deployed DLL version = 1.0.0+${dll_sha}"
+    if [[ -z "$full_sha" ]]; then
+      # The dir name did not resolve (e.g. the script is running from a copy
+      # of the repo that is not a git checkout, or lacks that commit). That
+      # is "cannot verify", NOT "verified different" -- do not accuse.
+      info_line "cannot cross-check the DLL commit: $(show "$base") does not resolve in ${REPO_ROOT}"
+    elif [[ "$dll_sha" == "$full_sha" ]]; then
+      check 1 "the deployed DLL was built from the commit the dir name claims"
+    else
+      check 0 "the deployed DLL was built from a different commit than the dir name claims"
+    fi
+  else
+    check 0 "the deployed DLL carries no '1.0.0+<sha>' version string"
+  fi
+
+  # The three identity keys. They must match this instance's expectation AND
+  # be byte-identical to the sibling instance's dir for the same commit --
+  # that is what catches "5000's config copied into 5001".
+  local apps="${LIVE_DIR}/appsettings.json"
+  if [[ -f "$apps" ]]; then
+    check 1 "appsettings.json found: $(show "$apps")"
+  else
+    check 0 "appsettings.json missing: $(show "$apps")"
+    fatal "cannot read the instance configuration."
+  fi
+
+  local key val expected
+  local -A EXPECTED_BY_KEY=(
+    [RootFolder]="$EXPECTED_ROOT"
+    [DatabaseName]="$EXPECTED_DB"
+    [UserPassLocation]="$EXPECTED_USERPASS"
+  )
+  for key in RootFolder DatabaseName UserPassLocation; do
+    val="$(json_get_opt "$apps" "MyPhotoSettings.${key}" || true)"
+    expected="${EXPECTED_BY_KEY[$key]}"
+    if [[ -z "$val" ]]; then
+      check 0 "appsettings.json has no MyPhotoSettings.${key}"
+      fatal "the instance configuration is incomplete."
+    fi
+    if [[ "$val" == "$expected" ]]; then
+      check 1 "MyPhotoSettings.${key} = $(show "$val") (matches instance ${PORT} expectation)"
+    else
+      check 0 "MyPhotoSettings.${key} = $(show "$val") != instance ${PORT} expectation $(show "$expected")"
+      fatal "the instance would serve the wrong photo root / database / user file."
+    fi
+  done
+
+  # The live dir must be a clean instance config: no Vlm section (that comes
+  # from the systemd environment) and not the repository's file.
+  if python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); sys.exit(0 if "Vlm" in d.get("MyPhotoSettings",{}) else 1)' "$apps" 2>/dev/null; then
+    check 0 "appsettings.json HAS a Vlm section (the deployed config is poisoned)"
+  else
+    check 1 "appsettings.json has no Vlm section (clean instance config)"
+  fi
+  local repo_apps="${REPO_ROOT}/MyPhotoWebApi/appsettings.json"
+  if [[ -f "$repo_apps" ]] && cmp -s "$repo_apps" "$apps"; then
+    check 0 "appsettings.json is identical to the REPOSITORY's appsettings.json"
+  else
+    check 1 "appsettings.json is NOT the repository's appsettings.json"
+  fi
+
+  # The drop-in must still be intact: it carries the Vlm environment, and
+  # it must NOT override the identity keys.
+  if [[ -f "$DROPIN" ]]; then
+    check 1 "drop-in exists: $(show "$DROPIN")"
+  else
+    check 0 "drop-in not found: $(show "$DROPIN")"
+    fatal "the drop-in is missing; the Vlm configuration would be lost."
+  fi
+  local overrides
+  overrides="$(dropin_lines "$DROPIN" "Environment=MyPhotoSettings__(RootFolder|DatabaseName|UserPassLocation|FileUrl)=" || true)"
+  if [[ -z "$overrides" ]]; then
+    check 1 "drop-in contains no Environment override for RootFolder/DatabaseName/UserPassLocation/FileUrl"
+  else
+    check 0 "drop-in contains an environment override that would override appsettings.json:"
+    printf '       %s\n' "$overrides"
+    fatal "remove those Environment lines."
+  fi
+  local vlm_count
+  vlm_count="$(dropin_lines "$DROPIN" "Environment=MyPhotoSettings__Vlm__" | wc -l | tr -d ' ')"
+  if [[ "$vlm_count" -ge 1 ]]; then
+    check 1 "drop-in carries ${vlm_count} Environment=MyPhotoSettings__Vlm__* line(s) (values not printed)"
+  else
+    check 0 "drop-in has NO Environment=MyPhotoSettings__Vlm__* lines"
+  fi
+  if dropin_lines "$DROPIN" "^ExecStart=$" | grep -q .; then
+    check 1 "drop-in has the 'ExecStart=' reset line"
+  else
+    check 0 "drop-in is missing the 'ExecStart=' reset line"
+  fi
+}
+
+# --- Stage 2 (check mode): file-level manifest of the live deploy dir ------
+# Compares the live dir against a reference publish output, file by file,
+# excluding appsettings.json (it legitimately differs per instance).
+check_stage2_live() {
+  section "STAGE 2 — FILE-LEVEL MANIFEST OF THE LIVE DEPLOY DIR"
+
+  local reference="" ref_label=""
+  if [[ -n "$SOURCE_DIR_ARG" ]]; then
+    reference="$SOURCE_DIR_ARG"
+    ref_label="source publish dir"
+  else
+    # Default reference: the sibling instance's dir for the SAME commit.
+    # Both instances run the same build, so their manifests must match
+    # exactly (apart from appsettings.json).
+    local peer_unit peer_dir peer_label
+    peer_unit="$(peer_unit_for_port "$PEER_PORT")"
+    peer_dir="$(live_deploy_dir "$peer_unit")"
+    peer_label="$(basename "$peer_dir" 2>/dev/null || true)"
+    if [[ -n "$peer_dir" && -d "$peer_dir" && "$peer_label" == "$(basename "$LIVE_DIR")" ]]; then
+      reference="$peer_dir"
+      ref_label="peer instance's dir for the same commit"
+    fi
+  fi
+
+  local manifest
+  manifest="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -f '$manifest'" RETURN
+  make_manifest "$LIVE_DIR" "$manifest" "appsettings.json"
+  local n
+  n="$(wc -l < "$manifest" | tr -d ' ')"
+  check 1 "live deploy dir manifest built: ${n} file(s) (appsettings.json excluded)"
+
+  if [[ -z "$reference" ]]; then
+    info_line "no reference build available to diff against (pass --source-dir to compare with a publish output)"
+    return 0
+  fi
+
+  local ref_manifest
+  ref_manifest="$(mktemp)"
+  # shellcheck disable=SC2064
+  trap "rm -f '$manifest' '$ref_manifest'" RETURN
+  make_manifest "$reference" "$ref_manifest" "appsettings.json"
+  local ref_n
+  ref_n="$(wc -l < "$ref_manifest" | tr -d ' ')"
+  check 1 "reference manifest built: ${ref_n} file(s) from ${ref_label}"
+
+  # missing / differing / extra, all relative to the reference.
+  local missing=0 differing=0 extra=0 rel sh tsh
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    sh="${line%%  *}"; rel="${line#*  }"
+    if ! grep -qF -- "$rel" "$manifest"; then
+      printf '  %sMISSING%s %s\n' "${C_RED}" "${C_RESET}" "$rel"
+      missing=$((missing + 1)); continue
+    fi
+    tsh="$(grep -F -- "$rel" "$manifest" | head -n 1 | awk '{print $1}')"
+    if [[ "$tsh" != "$sh" ]]; then
+      printf '  %sDIFFERS%s %s (ref=%s live=%s)\n' "${C_RED}" "${C_RESET}" "$rel" "$sh" "$tsh"
+      differing=$((differing + 1))
+    fi
+  done < "$ref_manifest"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    rel="${line#*  }"
+    if ! grep -qF -- "$rel" "$ref_manifest"; then
+      extra=$((extra + 1))
+    fi
+  done < "$manifest"
+
+  if [[ "$missing" == "0" ]]; then
+    check 1 "every reference file is present in the live deploy dir (0 missing)"
+  else
+    check 0 "${missing} file(s) present in the reference are missing from the live deploy dir"
+  fi
+  if [[ "$differing" == "0" ]]; then
+    check 1 "every shared file has an identical sha256 (0 differing)"
+  else
+    check 0 "${differing} file(s) differ in sha256 between the reference and the live deploy dir"
+  fi
+  if [[ "$extra" == "0" ]]; then
+    check 1 "no unexpected extra files in the live deploy dir (0 extra)"
+  else
+    check 0 "${extra} extra file(s) in the live deploy dir that are not in the reference"
+  fi
+}
+
+# --- Stage 3 (check mode): the running process really runs from that dir ---
+check_stage3_live() {
+  section "STAGE 3 — POST-RESTART ASSERTIONS (live process)"
+
+  local pid
+  pid="$(systemctl --user show -p MainPID --value "$UNIT_NAME" 2>/dev/null || true)"
+  if [[ -n "$pid" && "$pid" != "0" && -d "/proc/${pid}" ]]; then
+    check 1 "service MainPID = ${pid}"
+  else
+    check 0 "could not determine a live MainPID for ${UNIT_NAME}"
+    fatal "the service is not running."
+  fi
+
+  # /proc/<pid>/cwd must point at the live deploy dir.
+  local cwd
+  cwd="$(readlink "/proc/${pid}/cwd" 2>/dev/null || true)"
+  if [[ "$cwd" == "$LIVE_DIR" ]]; then
+    check 1 "/proc/${pid}/cwd = $(show "$cwd")"
+  else
+    check 0 "/proc/${pid}/cwd = $(show "$cwd") != expected $(show "$LIVE_DIR")"
+    fatal "the running process is not executing from the live deploy directory."
+  fi
+
+  # /proc/<pid>/exe sha256 == the live dir's executable sha256.
+  local exe_sha dir_sha
+  exe_sha="$(sha256_of "/proc/${pid}/exe" 2>/dev/null || true)"
+  dir_sha="$(sha256_of "${LIVE_DIR}/MyPhotoWebApi" 2>/dev/null || true)"
+  if [[ -n "$exe_sha" && -n "$dir_sha" && "$exe_sha" == "$dir_sha" ]]; then
+    check 1 "/proc/${pid}/exe sha256 matches the live deploy dir's executable (${exe_sha})"
+  else
+    check 0 "/proc/${pid}/exe sha256 ${exe_sha:-<none>} != live dir executable sha256 ${dir_sha:-<none>}"
+    fatal "the running binary is not the one in the live deploy directory."
+  fi
+
+  # The KERNEL's own view: which files are actually mapped into the process.
+  # cwd alone can lie; /proc/<pid>/maps cannot.
+  #
+  # The assertion is NOT "every mapped path is under the deploy dir" -- a
+  # .NET process legitimately maps framework assemblies from
+  # /usr/lib/dotnet/shared/... and libc/libssl from /usr/lib/x86_64-linux-gnu/.
+  # What matters is that no mapped file comes from a DIFFERENT deploy dir
+  # (that would mean the process is running a stale or foreign build).
+  local maps
+  maps="$(awk '$NF ~ /^\// {print $NF}' "/proc/${pid}/maps" 2>/dev/null | sort -u || true)"
+  local mapped_count
+  mapped_count="$(printf '%s\n' "$maps" | grep -c . || true)"
+  check 1 "kernel reports ${mapped_count} mapped file path(s) under the filesystem"
+
+  local deploy_mapped stray
+  deploy_mapped="$(printf '%s\n' "$maps" | grep -E "^${DEPLOY_BASE}/" || true)"
+  stray="$(printf '%s\n' "$deploy_mapped" | grep -v "^${LIVE_DIR}/" || true)"
+  if [[ -z "$stray" ]]; then
+    check 1 "every file mapped from the deploy tree comes from the live deploy dir (0 stray)"
+  else
+    check 0 "mapped file path(s) come from a DIFFERENT deploy dir than $(show "$LIVE_DIR"):"
+    printf '%s\n' "$stray" | sed 's/^/       /'
+    fatal "the running process is mapped from a stale or foreign deploy directory."
+  fi
+
+  local live_mapped
+  live_mapped="$(printf '%s\n' "$deploy_mapped" | grep -c "^${LIVE_DIR}/" || true)"
+  check 1 "${live_mapped} mapped file(s) come from the live deploy dir"
+
+  # The mapped MyPhotoWebApi.dll must be the one in the live dir.
+  local mapped_dll
+  mapped_dll="$(printf '%s\n' "$maps" | grep -E "/MyPhotoWebApi\.dll$" | head -n 1 || true)"
+  if [[ -n "$mapped_dll" ]]; then
+    check 1 "kernel maps MyPhotoWebApi.dll from $(show "$mapped_dll")"
+    local mapped_sha expect_sha
+    mapped_sha="$(sha256_of "$mapped_dll" 2>/dev/null || true)"
+    expect_sha="$(sha256_of "${LIVE_DIR}/MyPhotoWebApi.dll" 2>/dev/null || true)"
+    if [[ -n "$mapped_sha" && -n "$expect_sha" && "$mapped_sha" == "$expect_sha" ]]; then
+      check 1 "the mapped MyPhotoWebApi.dll sha256 matches the live deploy dir's copy"
+    else
+      check 0 "the mapped MyPhotoWebApi.dll sha256 ${mapped_sha:-<none>} != live dir copy ${expect_sha:-<none>}"
+    fi
+  else
+    check 0 "the kernel maps no MyPhotoWebApi.dll"
+  fi
+
+  # The running process must not override the identity keys via the
+  # environment (only key NAMES are printed, never their values).
+  local env_names
+  env_names="$(tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null \
+    | grep -E '^MyPhotoSettings__(RootFolder|DatabaseName|UserPassLocation|FileUrl)=' \
+    | sed 's/=.*/=<redacted>/' || true)"
+  if [[ -z "$env_names" ]]; then
+    check 1 "the running process has no Environment override for RootFolder/DatabaseName/UserPassLocation/FileUrl"
+  else
+    check 0 "the running process overrides identity settings via the environment:"
+    printf '       %s\n' "$env_names"
+    fatal "an environment override would silently redirect the instance."
+  fi
+
+  local vlm_names
+  vlm_names="$(tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null \
+    | grep -cE '^MyPhotoSettings__Vlm__' || true)"
+  if [[ "${vlm_names:-0}" -ge 1 ]]; then
+    check 1 "the running process carries ${vlm_names} MyPhotoSettings__Vlm__* environment variable(s) (values not printed)"
+  else
+    check 0 "the running process carries NO MyPhotoSettings__Vlm__* environment variables"
+    fatal "the Vlm configuration was lost on restart."
+  fi
+}
+
+# --- Stage 4 (check mode): liveness + root isolation ----------------------
+check_stage4_live() {
+  section "STAGE 4 — LIVENESS AND ROOT ISOLATION"
+
+  local base="http://127.0.0.1:${PORT}"
+  local peer_base="http://127.0.0.1:${PEER_PORT}"
+
+  # /health on THIS instance. A 503 means the Mongo ping failed -- which may
+  # be a MongoDB-wide outage rather than a deployment problem. The peer is
+  # consulted to tell the two apart.
+  local code body
+  body="$(curl -s --max-time 20 "${base}/health" 2>/dev/null || true)"
+  code="$(http_code "${base}/health")"
+  if [[ "$code" == "000" ]]; then
+    check 0 "GET ${base}/health -> 000 (nothing is listening on port ${PORT}; is ${UNIT_NAME} running?)"
+    fatal "the instance is not reachable."
+  fi
+
+  local peer_code
+  peer_code="$(http_code "${peer_base}/health")"
+
+  if [[ "$code" == "200" ]]; then
+    check 1 "GET ${base}/health -> 200 ${body}"
+  else
+    if [[ "$peer_code" != "200" ]]; then
+      check 0 "GET ${base}/health -> ${code} AND the peer on port ${PEER_PORT} -> ${peer_code}: MongoDB is unreachable for BOTH instances (a shared-dependency outage, not a deployment failure)"
+    else
+      check 0 "GET ${base}/health -> ${code} while the peer is healthy (body: ${body})"
+      fatal "this instance alone is unhealthy."
+    fi
+  fi
+  if [[ "$code" == "200" ]]; then
+    if [[ "$body" == *'"status":"ok"'* ]]; then
+      check 1 "health body reports status=ok"
+    else
+      check 0 "health body does not report status=ok (body: ${body})"
+    fi
+  fi
+
+  # Isolation, both directions:
+  #   a file that exists ONLY under this instance's root -> 200 here, 404 on
+  #   the peer; and a file that exists ONLY under the peer's root -> 404 here.
+  local peer_root
+  peer_root="$(peer_root_dir "$PEER_PORT")"
+  if [[ -z "$peer_root" ]]; then
+    check 0 "could not determine the peer instance's photo root (port ${PEER_PORT})"
+    fatal "cannot run the isolation assertions without the peer's root."
+  fi
+  if [[ "$peer_root" == "$EXPECTED_ROOT" ]]; then
+    check 0 "the peer instance (port ${PEER_PORT}) serves the SAME photo root as this one ($(show "$EXPECTED_ROOT"))"
+    fatal "the two instances share a photo root; isolation is structurally impossible."
+  fi
+  check 1 "the peer instance (port ${PEER_PORT}) serves a different root: $(show "$peer_root")"
+
+  local own_probe peer_probe
+  own_probe="$(find_exclusive_probe "$EXPECTED_ROOT" "$peer_root" || true)"
+  peer_probe="$(find_exclusive_probe "$peer_root" "$EXPECTED_ROOT" || true)"
+
+  if [[ -z "$own_probe" ]]; then
+    check 0 "could not find a file that exists only under $(show "$EXPECTED_ROOT")"
+    fatal "cannot run the isolation assertions without a probe file."
+  fi
+  local enc
+  enc="$(url_encode_path "$own_probe")"
+  local own_code peer_code2
+  own_code="$(http_code "${base}/File/${enc}")"
+  peer_code2="$(http_code "${peer_base}/File/${enc}")"
+  if [[ "$own_code" == "200" ]]; then
+    check 1 "GET ${base}/File/${enc} -> 200 (file only this instance has: $(show "$own_probe"))"
+  else
+    check 0 "GET ${base}/File/${enc} -> ${own_code} (expected 200 for a file only this instance has)"
+    fatal "the instance does not serve files from its own root."
+  fi
+  if [[ "$peer_code2" == "404" ]]; then
+    check 1 "GET ${peer_base}/File/${enc} -> 404 (the peer does NOT serve this instance's files)"
+  else
+    check 0 "GET ${peer_base}/File/${enc} -> ${peer_code2} (expected 404 -- the instances are NOT isolated!)"
+    fatal "the two instances share a photo root; isolation is broken."
+  fi
+
+  # The reverse direction (b): a file that only the PEER has must be 404 here.
+  if [[ -z "$peer_probe" ]]; then
+    check 0 "could not find a file that exists only under $(show "$OTHER_ROOT")"
+    info_line "skipping the reverse isolation check"
+    return 0
+  fi
+  local penc
+  penc="$(url_encode_path "$peer_probe")"
+  local self_code peer_code3
+  self_code="$(http_code "${base}/File/${penc}")"
+  peer_code3="$(http_code "${peer_base}/File/${penc}")"
+  if [[ "$self_code" == "404" ]]; then
+    check 1 "GET ${base}/File/${penc} -> 404 (file only the PEER has: $(show "$peer_probe"))"
+  else
+    check 0 "GET ${base}/File/${penc} -> ${self_code} (expected 404 -- this instance serves the OTHER instance's files!)"
+    fatal "the instances are not isolated."
+  fi
+  if [[ "$peer_code3" == "200" ]]; then
+    check 1 "GET ${peer_base}/File/${penc} -> 200 (the peer serves its own file)"
+  else
+    check 0 "GET ${peer_base}/File/${penc} -> ${peer_code3} (expected 200)"
+  fi
+}
+
+# Run the full read-only audit.
+run_check() {
+  info "CHECK MODE — read-only audit of instance ${PORT}; nothing will be written, copied or restarted"
+  check_stage1_live
+  check_stage2_live
+  check_stage3_live
+  check_stage4_live
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 main() {
   parse_args "$@"
+
+  # --check is a standalone READ-ONLY audit: it needs no --target (it
+  # inspects what is currently deployed) and never writes anything.
+  if [[ "$CHECK_MODE" == "1" ]]; then
+    if [[ -z "$INSTANCE" ]]; then
+      err "--instance is required."
+      usage >&2
+      exit 2
+    fi
+    if [[ "$ROLLBACK" == "1" || "$BUILD" == "1" ]]; then
+      err "--check cannot be combined with --rollback or --build."
+      exit 2
+    fi
+    require_tools
+    resolve_instance
+    run_check
+    summary
+    return 0
+  fi
 
   if [[ "$ROLLBACK" == "1" ]]; then
     require_tools
@@ -1311,13 +1859,20 @@ summary() {
   section "SUMMARY"
   printf '  checks run : %d\n' "$CHECKS"
   printf '  failures   : %d\n' "$FAILURES"
-  if [[ "$DRY_RUN" == "1" ]]; then
+  if [[ "$CHECK_MODE" == "1" ]]; then
+    printf '  mode       : %sCHECK%s (read-only; nothing was changed)\n' "${C_YELLOW}" "${C_RESET}"
+  elif [[ "$DRY_RUN" == "1" ]]; then
     printf '  mode       : %sDRY RUN%s (nothing was changed)\n' "${C_YELLOW}" "${C_RESET}"
   else
     printf '  mode       : %sLIVE%s\n' "${C_BOLD}" "${C_RESET}"
   fi
   printf '  instance   : %s (port %s, DB %s, root %s)\n' "$PORT" "$PORT" "$EXPECTED_DB" "$EXPECTED_ROOT"
-  printf '  target dir : %s\n' "$TARGET_DIR"
+  if [[ "$CHECK_MODE" == "1" ]]; then
+    printf '  live dir   : %s\n' "$LIVE_DIR"
+    printf '  peer       : port %s\n' "$PEER_PORT"
+  else
+    printf '  target dir : %s\n' "$TARGET_DIR"
+  fi
   if [[ -n "$OLD_DEPLOY_DIR" ]]; then
     printf '  previous   : %s (kept on disk for rollback)\n' "$OLD_DEPLOY_DIR"
   fi

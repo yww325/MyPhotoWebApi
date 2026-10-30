@@ -48,7 +48,7 @@ bash scripts/deploy-instance.sh --instance 5000 --rollback
 | Mongo 库 | `MyPhotos` | `MyPhotos2` |
 | 照片根目录 | `/home/yww/FtpRoot/PicRootFolder` | `/home/yww/FtpRoot/PicRootFolder2` |
 | 部署根目录 | `/home/yww/deploy/myphoto5000/` | `/home/yww/deploy/myphoto5001/` |
-| 密码文件 | `/home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/UserPass.txt` | `/home/yww/UserPass2.txt` |
+| 密码文件 | `/home/yww/UserPass.txt` | `/home/yww/UserPass2.txt` |
 
 **两个实例跑的是同一份构建，但配置不同。** 差异只体现在各自 deploy 目录里的
 `appsettings.json`（三个键：`RootFolder` / `DatabaseName` / `UserPassLocation`）。

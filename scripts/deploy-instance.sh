@@ -65,7 +65,7 @@ readonly INST_5000_ROOT="/home/yww/FtpRoot/PicRootFolder"
 readonly INST_5001_ROOT="/home/yww/FtpRoot/PicRootFolder2"
 # Location of the password file each instance authenticates against. These
 # are PATHS, never the password itself: the file is never read or printed.
-readonly INST_5000_USERPASS="/home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/UserPass.txt"
+readonly INST_5000_USERPASS="/home/yww/UserPass.txt"
 readonly INST_5001_USERPASS="/home/yww/UserPass2.txt"
 
 DRY_RUN=0

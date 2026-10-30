@@ -11,7 +11,7 @@
 ## 1. 一分钟速览
 
 ```bash
-cd /home/yww/Coding/MyPhotoWebApi-feature
+cd /home/yww/.openclaw/workspace/Coding/MyPhotoWebApi
 
 # 0) 体检：只读审计「现在正在跑的东西」（不需要 --target，什么都不改）
 bash scripts/deploy-instance.sh --check --instance 5000
@@ -115,7 +115,7 @@ bash scripts/deploy-instance.sh --instance 5000 --rollback
 
 ### 步骤 1 · 确认代码已推送
 ```bash
-cd /home/yww/Coding/MyPhotoWebApi-feature
+cd /home/yww/.openclaw/workspace/Coding/MyPhotoWebApi
 git fetch origin
 git log --oneline -1 origin/main
 ```

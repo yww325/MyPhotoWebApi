@@ -213,7 +213,9 @@ bash scripts/deploy-instance.sh --instance 5001 --target <commit-sha> --build
 
 ## 6. 回滚
 
-旧 deploy 目录一律保留，所以回滚只是把 unit 指回去再重启：
+脚本从不删除旧 deploy 目录，所以回滚就是把 unit 指回旧目录再重启。
+
+### 优先用脚本
 ```bash
 # 回滚到脚本记录的上一版
 bash scripts/deploy-instance.sh --instance 5000 --rollback
@@ -221,15 +223,56 @@ bash scripts/deploy-instance.sh --instance 5000 --rollback
 # 或显式指定
 bash scripts/deploy-instance.sh --instance 5000 --rollback --rollback-to cf0c3f9-minimax
 ```
-回滚同样会跑阶段 3、阶段 4 的断言，所以**回滚后也是被验证过的**。
+脚本会从 `/home/yww/deploy/myphoto5000/.rollback-state`（由上一次部署写入）推断目标；
+没有这个文件时退化为 unit 里的 `WorkingDirectory`。改完 unit、重启，并**重跑阶段 3、
+阶段 4 的断言**，所以回滚后的状态同样是被验证过的。
 
-手动回滚（脚本不可用时）：
+### 脚本不可用时的手动回滚
+
+base unit 里直接写着部署路径（**已经没有 drop-in 了**），改这两行即可：
+
 ```bash
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
-cd ~/.config/systemd/user/myphoto5000.service.d
-cp feature-deploy.conf.bak.<时间戳> feature-deploy.conf   # 换回旧路径
+cd ~/.config/systemd/user
+
+# 1) 先看现在指向哪个版本
+grep -E '^(WorkingDirectory|ExecStart)=' myphoto5000.service
+
+# 2) 两行一起换回旧版本（示例：从 dd4a04d 回到 cf0c3f9-minimax）
+sed -i \
+  -e 's|^WorkingDirectory=.*|WorkingDirectory=/home/yww/deploy/myphoto5000/cf0c3f9-minimax|' \
+  -e 's|^ExecStart=.*|ExecStart=/home/yww/deploy/myphoto5000/cf0c3f9-minimax/MyPhotoWebApi --urls http://127.0.0.1:5000|' \
+  myphoto5000.service
+
+# 3) 确认旧目录真的存在，再重启
+ls -d /home/yww/deploy/myphoto5000/cf0c3f9-minimax
+systemctl --user daemon-reload
+systemctl --user restart myphoto5000
+curl -s http://127.0.0.1:5000/health
+```
+
+也可以直接还原脚本在改写前留下的整份备份（**最新的那个 `.bak.<时间戳>` 就是上一次部署前的状态**）：
+
+```bash
+cd ~/.config/systemd/user
+ls -t myphoto5000.service.bak.* | head -1          # 确认要还原哪一份
+cp -p myphoto5000.service.bak.<时间戳> myphoto5000.service
 systemctl --user daemon-reload && systemctl --user restart myphoto5000
 ```
+
+> 手动回滚**不会**重跑断言。改完自己确认三件事：`/health` 返回 200、
+> `grep WorkingDirectory` 指向的目录确实存在、该目录 `appsettings.json` 的
+> `DatabaseName` / `RootFolder` 是这个实例的。想要被验证过的回滚，请用脚本。
+
+### 两个坑
+
+- **没有 `.rollback-state` 时，`--rollback` 会退化成 unit 当前的 `WorkingDirectory`**，
+  也就是"回滚到正在跑的版本"——重启一次，什么都没变，却照样打印 PASS。拿不准就显式
+  写 `--rollback-to <目录名>`，或先 `ls /home/yww/deploy/myphoto5000/` 看看有哪些版本。
+- `myphoto500N.service.d/` 目录可能还在，里面残留着 `feature-deploy.conf.bak.*`——
+  那是旧 drop-in 的备份。systemd 只加载 `*.conf`，所以它们**不生效**
+  （`systemctl --user show -p DropInPaths myphoto5000.service` 输出为空即可确认）。
+  不要把它们改名成 `.conf` 放回去，否则会把已删掉的 `Environment=` 覆盖项又请回来。
 
 ---
 

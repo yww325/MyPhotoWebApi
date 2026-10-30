@@ -14,12 +14,12 @@
 #   Stage 1  PRE-DEPLOY   target dir name resolves to the expected commit;
 #                         target appsettings.json RootFolder/DatabaseName/
 #                         UserPassLocation are byte-identical to the OLD dir
-#                         currently referenced by the drop-in.
+#                         currently referenced by the systemd unit.
 #   Stage 2  POST-COPY    every file in the publish output is present in the
 #                         target with an identical sha256 (appsettings.json
 #                         excluded: it legitimately differs per instance).
 #   Stage 3  POST-RESTART the running process really runs from the new dir:
-#                         /proc/<pid>/cwd, /proc/<pid>/exe sha256, drop-in
+#                         /proc/<pid>/cwd, /proc/<pid>/exe sha256, unit
 #                         WorkingDirectory, and appsettings DatabaseName.
 #   Stage 4  LIVENESS     /health returns 200, the instance serves a file from
 #           + ISOLATION   ITS OWN root with 200, and the same path on the OTHER
@@ -30,8 +30,8 @@
 #   * An existing target dir is NEVER overwritten without --force.
 #   * The repo's appsettings.json is NEVER copied over the instance's own
 #     appsettings.json (the repo one has a "Vlm" section and the wrong root).
-#   * The systemd drop-in is written atomically (temp file + mv).
-#   * The drop-in's "Environment=MyPhotoSettings__Vlm__*" lines are copied
+#   * The systemd unit is written atomically (temp file + mv).
+#   * The unit carries only WorkingDirectory/ExecStart; the Vlm settings
 #     VERBATIM; only WorkingDirectory= and the ExecStart= path are changed.
 #     (The "ExecStart=" reset line is preserved. A stray
 #     "Environment=MyPhotoSettings__RootFolder=..." would silently redirect
@@ -82,7 +82,7 @@ EXPECTED_LABEL=""
 OLD_DEPLOY_DIR=""
 DEPLOY_ROOT=""
 TARGET_DIR=""
-DROPIN=""
+UNIT_FILE=""
 UNIT_NAME=""
 PORT=""
 EXPECTED_DB=""
@@ -159,7 +159,7 @@ USAGE
   scripts/deploy-instance.sh --instance <5000|5001|1|2> --target <label> [options]
 
   Deploy a new build to the instance's deploy directory, repoint the systemd
-  drop-in, restart the user service, and verify the result with four stages
+  unit, restart the user service, and verify the result with four stages
   of assertions.
 
 REQUIRED
@@ -178,7 +178,7 @@ OPTIONS
                         and deploy from there. The temporary dir is removed
                         afterwards unless --keep-build-dir is given.
   --dry-run             Run every READ-ONLY check and print what WOULD happen.
-                        Mutates nothing: no copy, no drop-in write, no restart.
+                        Mutates nothing: no copy, no unit write, no restart.
   --check               READ-ONLY audit of the LIVE deployment. Runs all four
                         stages of assertions against what is currently
                         deployed and reports PASS/FAIL for each. Takes no
@@ -206,8 +206,8 @@ SAFETY
   * An existing target directory is never overwritten without --force.
   * The instance's own appsettings.json is preserved; the repository's
     appsettings.json is never copied over it.
-  * The systemd drop-in is written atomically and its
-    "Environment=MyPhotoSettings__Vlm__*" lines are preserved verbatim.
+  * The systemd unit is written atomically; only WorkingDirectory= and
+    ExecStart= change, everything else is preserved verbatim.
   * Secret values (API keys, password files) are never read or printed.
 
 EXAMPLES
@@ -263,18 +263,18 @@ KEEP_BUILD_DIR=0
 # Print a value for a checklist line, quoting it so spaces are visible.
 show() { printf '"%s"' "$1"; }
 
-# Extract the value of a systemd drop-in directive, e.g.
-#   dropin_value <file> <Key>          -> value of "Key=..."
+# Extract the value of a systemd unit directive, e.g.
+#   unit_value <file> <Key>          -> value of "Key=..."
 # Only the last occurrence wins (systemd semantics), and only the first line
 # of a multi-line value is returned (not needed here, but explicit).
-dropin_value() {
+unit_value() {
   local file="$1" key="$2"
   [[ -f "$file" ]] || return 1
   sed -n -E "s/^${key}=(.*)\$/\1/p" "$file" | tail -n 1
 }
 
 # Print all lines starting with a prefix, verbatim.
-dropin_lines() {
+unit_lines() {
   local file="$1" prefix="$2"
   [[ -f "$file" ]] || return 1
   grep -E "^${prefix}" "$file" || true
@@ -397,7 +397,11 @@ resolve_instance() {
     esac
   UNIT_NAME="myphoto${PORT}.service"
   DEPLOY_ROOT="${DEPLOY_BASE}/myphoto${PORT}"
-  DROPIN="${SYSTEMD_USER_DIR}/${UNIT_NAME}.d/feature-deploy.conf"
+  # Configuration lives in each instance's own appsettings.json (inside its
+  # deploy dir); the systemd unit carries only WorkingDirectory/ExecStart.
+  # There is deliberately NO drop-in: a drop-in was the only place the Vlm
+  # settings used to live, so losing it silently disabled AI tagging.
+  UNIT_FILE="${SYSTEMD_USER_DIR}/${UNIT_NAME}"
 
   # The peer instance's port is a PARAMETER, never hardcoded per instance:
   # 5000 and 5001 run through exactly the same code path. An explicit
@@ -468,20 +472,20 @@ stage1_predeploy() {
     info_line "target label $(show "$TARGET_LABEL") is not sha-shaped; skipping the HEAD comparison"
   fi
 
-  # 1c. The drop-in must exist and must point at an existing deploy dir.
-  if [[ -f "$DROPIN" ]]; then
-    check 1 "drop-in exists: $(show "$DROPIN")"
+  # 1c. The systemd unit must exist and must point at an existing deploy dir.
+  if [[ -f "$UNIT_FILE" ]]; then
+    check 1 "unit file exists: $(show "$UNIT_FILE")"
   else
-    check 0 "drop-in not found: $(show "$DROPIN")"
-    fatal "cannot determine the currently deployed directory without the drop-in."
+    check 0 "unit file not found: $(show "$UNIT_FILE")"
+    fatal "cannot determine the currently deployed directory without the unit file."
   fi
 
   local wd
-  wd="$(dropin_value "$DROPIN" "WorkingDirectory" || true)"
+  wd="$(unit_value "$UNIT_FILE" "WorkingDirectory" || true)"
   if [[ -n "$wd" ]]; then
-    check 1 "drop-in WorkingDirectory = $(show "$wd")"
+    check 1 "unit WorkingDirectory = $(show "$wd")"
   else
-    check 0 "drop-in has no WorkingDirectory= line"
+    check 0 "unit has no WorkingDirectory= line"
     fatal "cannot determine the currently deployed directory."
   fi
   OLD_DEPLOY_DIR="$wd"
@@ -490,7 +494,7 @@ stage1_predeploy() {
     check 1 "current deploy directory exists on disk: $(show "$OLD_DEPLOY_DIR")"
   else
     check 0 "current deploy directory does NOT exist: $(show "$OLD_DEPLOY_DIR")"
-    fatal "the drop-in points at a missing directory; fix that before deploying."
+    fatal "the unit points at a missing directory; fix that before deploying."
   fi
 
   # 1d. The target directory must not already exist (unless --force).
@@ -515,15 +519,15 @@ stage1_predeploy() {
     fatal "cannot copy the instance-specific appsettings.json."
   fi
 
-  # 1e-bis. The OLD dir's appsettings.json must itself be a clean instance
-  #         config: no "Vlm" section (that comes from the systemd env) and
-  #         not the repository's file. If the CURRENTLY deployed config is
-  #         already poisoned, everything derived from it would be too.
+  # 1e-bis. The OLD dir's appsettings.json is the instance's whole config:
+  #         it MUST carry the Vlm section (AI tagging reads it from here),
+  #         and it must NOT be the repository's file (the repo one points at
+  #         a different model/key and the wrong root for instance 5001).
   if python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); sys.exit(0 if "Vlm" in d.get("MyPhotoSettings",{}) else 1)' "$old_appsettings" 2>/dev/null; then
-    check 0 "old appsettings.json HAS a Vlm section (the deployed config is poisoned; Vlm must come from the systemd env)"
-    fatal "the currently deployed appsettings.json is not a clean instance config."
+    check 1 "old appsettings.json carries the Vlm section (AI tagging is configured from this file)"
   else
-    check 1 "old appsettings.json has no Vlm section (clean instance config)"
+    check 0 "old appsettings.json has NO Vlm section (AI tagging would answer 503)"
+    fatal "the currently deployed config is missing the Vlm section."
   fi
   local repo_appsettings_probe="${REPO_ROOT}/MyPhotoWebApi/appsettings.json"
   if [[ -f "$repo_appsettings_probe" ]] && cmp -s "$repo_appsettings_probe" "$old_appsettings"; then
@@ -581,34 +585,39 @@ stage1_predeploy() {
     fatal "the instance's configured database is not what instance ${PORT} is supposed to use."
   fi
 
-  # 1h. The drop-in must not contain a RootFolder/DatabaseName override, which
+  # 1h. The unit must not contain a RootFolder/DatabaseName override, which
   #     would silently win over appsettings.json.
   local overrides
-  overrides="$(dropin_lines "$DROPIN" "Environment=MyPhotoSettings__(RootFolder|DatabaseName|UserPassLocation|FileUrl)=" || true)"
+  overrides="$(unit_lines "$UNIT_FILE" "Environment=MyPhotoSettings__(RootFolder|DatabaseName|UserPassLocation|FileUrl)=" || true)"
   if [[ -z "$overrides" ]]; then
-    check 1 "drop-in contains no Environment override for RootFolder/DatabaseName/UserPassLocation/FileUrl"
+    check 1 "unit contains no Environment override for RootFolder/DatabaseName/UserPassLocation/FileUrl"
   else
-    check 0 "drop-in contains an environment override that would override appsettings.json:"
+    check 0 "unit contains an environment override that would override appsettings.json:"
     printf '       %s\n' "$overrides"
     fatal "remove those Environment lines before deploying."
   fi
 
-  # 1i. The drop-in must carry the expected number of Vlm Environment lines.
+  # 1i. The unit must NOT carry Vlm environment lines: the Vlm settings
+  #     belong in the instance's own appsettings.json. A leftover
+  #     Environment=MyPhotoSettings__Vlm__* would silently win over the file
+  #     and make the deployed config misleading.
   local vlm_count
-  vlm_count="$(dropin_lines "$DROPIN" "Environment=MyPhotoSettings__Vlm__" | wc -l | tr -d ' ')"
-  if [[ "$vlm_count" -ge 1 ]]; then
-    check 1 "drop-in carries ${vlm_count} Environment=MyPhotoSettings__Vlm__* line(s) (values not printed)"
+  vlm_count="$(unit_lines "$UNIT_FILE" "Environment=MyPhotoSettings__Vlm__" | wc -l | tr -d ' ')"
+  if [[ "$vlm_count" == "0" ]]; then
+    check 1 "unit carries no Environment=MyPhotoSettings__Vlm__* lines (Vlm lives in appsettings.json)"
   else
-    check 0 "drop-in has NO Environment=MyPhotoSettings__Vlm__* lines"
-    fatal "the drop-in must preserve the Vlm environment lines."
+    check 0 "unit still carries ${vlm_count} Environment=MyPhotoSettings__Vlm__* line(s), which would override appsettings.json"
+    fatal "move those settings into the instance's appsettings.json."
   fi
 
-  # 1j. The drop-in must keep the "ExecStart=" reset line.
-  if dropin_lines "$DROPIN" "^ExecStart=$" | grep -q .; then
-    check 1 "drop-in has the 'ExecStart=' reset line (will be preserved)"
+  # 1j. The unit must have exactly one ExecStart= (no reset-line trickery).
+  local execstart_count
+  execstart_count="$(unit_lines "$UNIT_FILE" "^ExecStart=" | wc -l | tr -d ' ')"
+  if [[ "$execstart_count" == "1" ]]; then
+    check 1 "unit has exactly one ExecStart= line"
   else
-    check 0 "drop-in is missing the 'ExecStart=' reset line"
-    fatal "without the reset line the new ExecStart would be appended to the old one."
+    check 0 "unit has ${execstart_count} ExecStart= line(s) (expected exactly 1)"
+    fatal "the unit must carry a single ExecStart= line."
   fi
 
   # 1k. The source publish dir must exist and be a plausible publish output.
@@ -639,10 +648,10 @@ stage1_predeploy() {
   done
 
   # 1m. The source appsettings.json must NOT be copied over the instance's.
-  #     The repo's has a "Vlm" section and the wrong root for instance 5001.
+  #     The repo's points at a different model/key and the wrong root for 5001.
   if [[ -f "${SOURCE_DIR}/appsettings.json" ]]; then
     if python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); sys.exit(0 if "Vlm" in d.get("MyPhotoSettings",{}) else 1)' "${SOURCE_DIR}/appsettings.json" 2>/dev/null; then
-      check 1 "source appsettings.json HAS a Vlm section (it will NOT be copied — the instance's own file is kept)"
+      check 1 "source appsettings.json has a Vlm section (it will NOT be copied — the instance's own file is kept)"
     else
       check 1 "source appsettings.json has no Vlm section (it still will NOT be copied — the instance's own file is kept)"
     fi
@@ -796,10 +805,10 @@ stage2_copy() {
   local repo_appsettings="${REPO_ROOT}/MyPhotoWebApi/appsettings.json"
   if [[ -f "$repo_appsettings" ]]; then
     if cmp -s "$repo_appsettings" "${TARGET_DIR}/appsettings.json"; then
-      check 0 "target appsettings.json is identical to the REPOSITORY's appsettings.json (would add a Vlm section)"
+      check 0 "target appsettings.json is identical to the REPOSITORY's appsettings.json"
       fatal "the repo appsettings.json was copied over the instance's."
     else
-      check 1 "target appsettings.json is NOT the repository's appsettings.json (no Vlm section leaked)"
+      check 1 "target appsettings.json is NOT the repository's file (repo points at a different model/key/root)"
     fi
   fi
 
@@ -817,62 +826,62 @@ stage2_copy() {
 }
 
 # ---------------------------------------------------------------------------
-# Drop-in rewriting
+# Unit rewriting
 # ---------------------------------------------------------------------------
-write_dropin() {
-  section "REPOINT THE SYSTEMD DROP-IN"
+write_unit() {
+  section "REPOINT THE SYSTEMD UNIT"
 
-  local tmp_dropin
-  tmp_dropin="$(mktemp "${DROPIN}.tmp.XXXXXX")"
+  local tmp_unit
+  tmp_unit="$(mktemp "${UNIT_FILE}.tmp.XXXXXX")"
 
-  local line first=1
+  local line
   while IFS= read -r line || [[ -n "$line" ]]; do
     if [[ "$line" == "WorkingDirectory="* ]]; then
-      printf 'WorkingDirectory=%s\n' "$TARGET_DIR" >> "$tmp_dropin"
-    elif [[ "$line" == "ExecStart="* && "$line" != "ExecStart=" ]]; then
-      # The real ExecStart line (the reset line "ExecStart=" is handled below).
-      printf 'ExecStart=%s/MyPhotoWebApi --urls http://127.0.0.1:%s\n' "$TARGET_DIR" "$PORT" >> "$tmp_dropin"
+      printf 'WorkingDirectory=%s\n' "$TARGET_DIR" >> "$tmp_unit"
+    elif [[ "$line" == "ExecStart="* ]]; then
+      # The single ExecStart= line is repointed at the new deploy dir.
+      printf 'ExecStart=%s/MyPhotoWebApi --urls http://127.0.0.1:%s\n' "$TARGET_DIR" "$PORT" >> "$tmp_unit"
     else
-      # Everything else (section header, the ExecStart= reset line, all
-      # Environment= lines) is copied VERBATIM.
-      printf '%s\n' "$line" >> "$tmp_dropin"
+      # Everything else ([Unit], Restart=, Environment=ASPNETCORE_ENVIRONMENT,
+      # [Install]) is copied VERBATIM.
+      printf '%s\n' "$line" >> "$tmp_unit"
     fi
-    first=0
-  done < "$DROPIN"
+  done < "$UNIT_FILE"
 
-  # Sanity: the rewritten file must still contain the reset line and the Vlm
-  # environment lines.
-  if ! grep -qE '^ExecStart=$' "$tmp_dropin"; then
-    rm -f "$tmp_dropin"
-    fatal "rewritten drop-in lost the 'ExecStart=' reset line; aborting before any change."
+  # Sanity: exactly one WorkingDirectory= and one ExecStart= must remain, and
+  # no Vlm environment line may have appeared.
+  local wd_n ex_n vlm_n
+  wd_n="$(grep -cE '^WorkingDirectory=' "$tmp_unit" || true)"
+  ex_n="$(grep -cE '^ExecStart=' "$tmp_unit" || true)"
+  vlm_n="$(unit_lines "$tmp_unit" "Environment=MyPhotoSettings__Vlm__" | wc -l | tr -d ' ')"
+  if [[ "$wd_n" != "1" || "$ex_n" != "1" ]]; then
+    rm -f "$tmp_unit"
+    fatal "rewritten unit has ${wd_n} WorkingDirectory= and ${ex_n} ExecStart= line(s); aborting before any change."
   fi
-  local vlm_before vlm_after
-  vlm_before="$(dropin_lines "$DROPIN" "Environment=MyPhotoSettings__Vlm__" | wc -l | tr -d ' ')"
-  vlm_after="$(dropin_lines "$tmp_dropin" "Environment=MyPhotoSettings__Vlm__" | wc -l | tr -d ' ')"
-  if [[ "$vlm_before" != "$vlm_after" ]]; then
-    rm -f "$tmp_dropin"
-    fatal "rewritten drop-in has ${vlm_after} Vlm environment lines but the original had ${vlm_before}."
+  if [[ "$vlm_n" != "0" ]]; then
+    rm -f "$tmp_unit"
+    fatal "rewritten unit has ${vlm_n} Vlm environment line(s); Vlm must live in appsettings.json."
   fi
 
   if [[ "$DRY_RUN" == "1" ]]; then
-    dry_note "would atomically write the drop-in (temp file + mv) with:"
+    dry_note "would atomically write the unit (temp file + mv) with:"
     dry_note "  WorkingDirectory=${TARGET_DIR}"
     dry_note "  ExecStart=${TARGET_DIR}/MyPhotoWebApi --urls http://127.0.0.1:${PORT}"
-    dry_note "  the ${vlm_after} Environment=MyPhotoSettings__Vlm__* line(s) preserved verbatim"
-    rm -f "$tmp_dropin"
+    dry_note "  everything else (Restart=, ASPNETCORE_ENVIRONMENT, [Install]) preserved verbatim"
+    rm -f "$tmp_unit"
     return 0
   fi
 
-  # Keep a timestamped backup of the previous drop-in next to it. The
+  # Keep a timestamped backup of the previous unit next to it. The
   # pre-existing *.bak.* files are never touched.
-  local backup="${DROPIN}.bak.$(date +%Y%m%d_%H%M%S)"
-  cp -p "$DROPIN" "$backup"
-  info "previous drop-in backed up to $(show "$backup")"
+  local backup="${UNIT_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
+  cp -p "$UNIT_FILE" "$backup"
+  info "previous unit backed up to $(show "$backup")"
 
   # Atomic replace.
-  mv -f "$tmp_dropin" "$DROPIN"
-  check 1 "drop-in written atomically: $(show "$DROPIN")"
-  check 1 "drop-in now points at WorkingDirectory=$(show "$TARGET_DIR")"
+  mv -f "$tmp_unit" "$UNIT_FILE"
+  check 1 "unit written atomically: $(show "$UNIT_FILE")"
+  check 1 "unit now points at WorkingDirectory=$(show "$TARGET_DIR")"
 }
 
 # ---------------------------------------------------------------------------
@@ -976,24 +985,24 @@ stage3_postrestart() {
     info_line "/proc/${pid}/exe -> $(show "$exe_link")"
   fi
 
-  # 3c. The drop-in's WorkingDirectory must equal the new deploy dir.
+  # 3c. The unit's WorkingDirectory must equal the new deploy dir.
   local wd
-  wd="$(dropin_value "$DROPIN" "WorkingDirectory" || true)"
+  wd="$(unit_value "$UNIT_FILE" "WorkingDirectory" || true)"
   if [[ "$wd" == "$TARGET_DIR" ]]; then
-    check 1 "drop-in WorkingDirectory = $(show "$wd")"
+    check 1 "unit WorkingDirectory = $(show "$wd")"
   else
-    check 0 "drop-in WorkingDirectory = $(show "$wd") != expected $(show "$TARGET_DIR")"
-    fatal "the drop-in was not updated correctly."
+    check 0 "unit WorkingDirectory = $(show "$wd") != expected $(show "$TARGET_DIR")"
+    fatal "the unit was not updated correctly."
   fi
 
-  # 3d. The drop-in's ExecStart must point at the new deploy dir.
+  # 3d. The unit's ExecStart must point at the new deploy dir.
   local execstart
-  execstart="$(dropin_value "$DROPIN" "ExecStart" || true)"
+  execstart="$(unit_value "$UNIT_FILE" "ExecStart" || true)"
   if [[ "$execstart" == "${TARGET_DIR}/MyPhotoWebApi --urls http://127.0.0.1:${PORT}" ]]; then
-    check 1 "drop-in ExecStart = $(show "$execstart")"
+    check 1 "unit ExecStart = $(show "$execstart")"
   else
-    check 0 "drop-in ExecStart = $(show "$execstart") != expected $(show "${TARGET_DIR}/MyPhotoWebApi --urls http://127.0.0.1:${PORT}")"
-    fatal "the drop-in ExecStart was not updated correctly."
+    check 0 "unit ExecStart = $(show "$execstart") != expected $(show "${TARGET_DIR}/MyPhotoWebApi --urls http://127.0.0.1:${PORT}")"
+    fatal "the unit ExecStart was not updated correctly."
   fi
 
   # 3e. The target appsettings.json's DatabaseName must equal the expected
@@ -1032,15 +1041,27 @@ stage3_postrestart() {
     fatal "an environment override would silently redirect the instance."
   fi
 
-  # 3h. The Vlm env vars must still be present in the running process.
+  # 3h. The Vlm settings must come from the target appsettings.json, NOT from
+  #     the process environment. A leftover env var would silently win over
+  #     the file and make the deployed config misleading.
   local vlm_names
   vlm_names="$(tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null \
     | grep -cE '^MyPhotoSettings__Vlm__' || true)"
-  if [[ "${vlm_names:-0}" -ge 1 ]]; then
-    check 1 "the running process carries ${vlm_names} MyPhotoSettings__Vlm__* environment variable(s) (values not printed)"
+  if [[ "${vlm_names:-0}" == "0" ]]; then
+    check 1 "the running process carries no MyPhotoSettings__Vlm__* env vars (Vlm comes from appsettings.json)"
   else
-    check 0 "the running process has NO MyPhotoSettings__Vlm__* environment variables"
-    fatal "the Vlm configuration was lost on restart."
+    check 0 "the running process still carries ${vlm_names} MyPhotoSettings__Vlm__* env var(s), overriding appsettings.json"
+    fatal "the Vlm configuration must live in appsettings.json, not the environment."
+  fi
+
+  # 3i. The target appsettings.json must carry a complete Vlm section.
+  local vlm_keys
+  vlm_keys="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); print(len((d.get("MyPhotoSettings",{}).get("Vlm") or {})))' "${TARGET_DIR}/appsettings.json" 2>/dev/null || echo 0)"
+  if [[ "${vlm_keys:-0}" -ge 1 ]]; then
+    check 1 "target appsettings.json carries ${vlm_keys} Vlm setting(s) (values not printed)"
+  else
+    check 0 "target appsettings.json has NO Vlm settings (AI tagging would answer 503)"
+    fatal "the deployed config is missing the Vlm section."
   fi
 }
 
@@ -1196,11 +1217,11 @@ run_rollback() {
   elif [[ -f "$state_file" ]]; then
     previous="$(cat "$state_file")"
   else
-    previous="$(dropin_value "$DROPIN" "WorkingDirectory" || true)"
+    previous="$(unit_value "$UNIT_FILE" "WorkingDirectory" || true)"
   fi
 
   if [[ -z "$previous" ]]; then
-    die "no rollback target known (no --rollback-to, no state file, no WorkingDirectory in the drop-in)."
+    die "no rollback target known (no --rollback-to, no state file, no WorkingDirectory in the unit)."
   fi
   if [[ ! -d "$previous" ]]; then
     die "rollback target directory does not exist: ${previous}"
@@ -1223,7 +1244,7 @@ run_rollback() {
     fatal "refusing to roll back to a directory with the wrong identity."
   fi
 
-  write_dropin
+  write_unit
 
   if [[ "$DRY_RUN" == "1" ]]; then
     dry_note "would run: systemctl --user daemon-reload && systemctl --user restart ${UNIT_NAME}"
@@ -1242,7 +1263,7 @@ run_rollback() {
     fi
     # Remember the directory we rolled back FROM, so a rollback can be undone.
     local current
-    current="$(dropin_value "$DROPIN" "WorkingDirectory" || true)"
+    current="$(unit_value "$UNIT_FILE" "WorkingDirectory" || true)"
     printf '%s\n' "$current" > "$state_file"
     info "rollback state recorded in ${state_file}"
   fi
@@ -1258,7 +1279,7 @@ run_rollback() {
 # is currently RUNNING, and reports pass/fail for every assertion. It never
 # writes, copies, restarts or deletes anything:
 #
-#   * it reads the live deploy dir from the drop-in's WorkingDirectory;
+#   * it reads the live deploy dir from the unit's WorkingDirectory;
 #   * it compares that dir's file-level sha256 manifest against a reference
 #     (the sibling instance's dir for the same commit, or --source-dir);
 #   * it verifies the live PROCESS via /proc/<pid>/{cwd,exe,maps};
@@ -1267,11 +1288,10 @@ run_rollback() {
 # The peer instance's port is a parameter (--peer-port), so 5000 and 5001 run
 # through exactly the same code path.
 
-# The live deploy dir of an instance: the drop-in's WorkingDirectory.
+# The live deploy dir of an instance: the unit's WorkingDirectory.
 live_deploy_dir() {
   local unit="$1"
-  local dropin="${SYSTEMD_USER_DIR}/${unit}.d/feature-deploy.conf"
-  dropin_value "$dropin" "WorkingDirectory" 2>/dev/null || true
+  unit_value "${SYSTEMD_USER_DIR}/${unit}" "WorkingDirectory" 2>/dev/null || true
 }
 
 # The peer unit name for a given port.
@@ -1326,7 +1346,7 @@ check_stage1_live() {
     check 1 "live deploy dir exists: $(show "$LIVE_DIR")"
   else
     check 0 "live deploy dir does not exist: $(show "$LIVE_DIR")"
-    fatal "the drop-in points at a missing directory; fix that before deploying."
+    fatal "the unit points at a missing directory; fix that before deploying."
   fi
 
   # The deploy dir NAME is the only version marker (a publish output has no
@@ -1400,9 +1420,9 @@ check_stage1_live() {
   # The live dir must be a clean instance config: no Vlm section (that comes
   # from the systemd environment) and not the repository's file.
   if python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); sys.exit(0 if "Vlm" in d.get("MyPhotoSettings",{}) else 1)' "$apps" 2>/dev/null; then
-    check 0 "appsettings.json HAS a Vlm section (the deployed config is poisoned)"
+    check 1 "appsettings.json carries the Vlm section (AI tagging configured from this file)"
   else
-    check 1 "appsettings.json has no Vlm section (clean instance config)"
+    check 0 "appsettings.json has NO Vlm section (AI tagging would answer 503)"
   fi
   local repo_apps="${REPO_ROOT}/MyPhotoWebApi/appsettings.json"
   if [[ -f "$repo_apps" ]] && cmp -s "$repo_apps" "$apps"; then
@@ -1411,34 +1431,45 @@ check_stage1_live() {
     check 1 "appsettings.json is NOT the repository's appsettings.json"
   fi
 
-  # The drop-in must still be intact: it carries the Vlm environment, and
-  # it must NOT override the identity keys.
-  if [[ -f "$DROPIN" ]]; then
-    check 1 "drop-in exists: $(show "$DROPIN")"
+  # The unit must still be intact and must NOT override the identity keys.
+  if [[ -f "$UNIT_FILE" ]]; then
+    check 1 "unit file exists: $(show "$UNIT_FILE")"
   else
-    check 0 "drop-in not found: $(show "$DROPIN")"
-    fatal "the drop-in is missing; the Vlm configuration would be lost."
+    check 0 "unit file not found: $(show "$UNIT_FILE")"
+    fatal "the unit file is missing; the service could not be managed."
   fi
   local overrides
-  overrides="$(dropin_lines "$DROPIN" "Environment=MyPhotoSettings__(RootFolder|DatabaseName|UserPassLocation|FileUrl)=" || true)"
+  overrides="$(unit_lines "$UNIT_FILE" "Environment=MyPhotoSettings__(RootFolder|DatabaseName|UserPassLocation|FileUrl)=" || true)"
   if [[ -z "$overrides" ]]; then
-    check 1 "drop-in contains no Environment override for RootFolder/DatabaseName/UserPassLocation/FileUrl"
+    check 1 "unit contains no Environment override for RootFolder/DatabaseName/UserPassLocation/FileUrl"
   else
-    check 0 "drop-in contains an environment override that would override appsettings.json:"
+    check 0 "unit contains an environment override that would override appsettings.json:"
     printf '       %s\n' "$overrides"
     fatal "remove those Environment lines."
   fi
+  # Vlm must live in appsettings.json, not the unit environment.
   local vlm_count
-  vlm_count="$(dropin_lines "$DROPIN" "Environment=MyPhotoSettings__Vlm__" | wc -l | tr -d ' ')"
-  if [[ "$vlm_count" -ge 1 ]]; then
-    check 1 "drop-in carries ${vlm_count} Environment=MyPhotoSettings__Vlm__* line(s) (values not printed)"
+  vlm_count="$(unit_lines "$UNIT_FILE" "Environment=MyPhotoSettings__Vlm__" | wc -l | tr -d ' ')"
+  if [[ "$vlm_count" == "0" ]]; then
+    check 1 "unit carries no Environment=MyPhotoSettings__Vlm__* lines (Vlm lives in appsettings.json)"
   else
-    check 0 "drop-in has NO Environment=MyPhotoSettings__Vlm__* lines"
+    check 0 "unit still carries ${vlm_count} Environment=MyPhotoSettings__Vlm__* line(s), which would override appsettings.json"
   fi
-  if dropin_lines "$DROPIN" "^ExecStart=$" | grep -q .; then
-    check 1 "drop-in has the 'ExecStart=' reset line"
+  # The instance config itself must carry a complete Vlm section.
+  local vlm_keys
+  vlm_keys="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); print(len((d.get("MyPhotoSettings",{}).get("Vlm") or {})))' "$apps" 2>/dev/null || echo 0)"
+  if [[ "${vlm_keys:-0}" -ge 1 ]]; then
+    check 1 "appsettings.json carries ${vlm_keys} Vlm setting(s) (AI tagging configured; values not printed)"
   else
-    check 0 "drop-in is missing the 'ExecStart=' reset line"
+    check 0 "appsettings.json has NO Vlm settings (AI tagging would answer 503)"
+    fatal "the instance config is missing the Vlm section."
+  fi
+  local execstart_count
+  execstart_count="$(unit_lines "$UNIT_FILE" "^ExecStart=" | wc -l | tr -d ' ')"
+  if [[ "$execstart_count" == "1" ]]; then
+    check 1 "unit has exactly one ExecStart= line"
+  else
+    check 0 "unit has ${execstart_count} ExecStart= line(s) (expected exactly 1)"
   fi
 }
 
@@ -1626,11 +1657,11 @@ check_stage3_live() {
   local vlm_names
   vlm_names="$(tr '\0' '\n' < "/proc/${pid}/environ" 2>/dev/null \
     | grep -cE '^MyPhotoSettings__Vlm__' || true)"
-  if [[ "${vlm_names:-0}" -ge 1 ]]; then
-    check 1 "the running process carries ${vlm_names} MyPhotoSettings__Vlm__* environment variable(s) (values not printed)"
+  if [[ "${vlm_names:-0}" == "0" ]]; then
+    check 1 "the running process carries no MyPhotoSettings__Vlm__* env vars (Vlm comes from appsettings.json)"
   else
-    check 0 "the running process carries NO MyPhotoSettings__Vlm__* environment variables"
-    fatal "the Vlm configuration was lost on restart."
+    check 0 "the running process still carries ${vlm_names} MyPhotoSettings__Vlm__* env var(s), overriding appsettings.json"
+    fatal "the Vlm configuration must live in appsettings.json, not the environment."
   fi
 }
 
@@ -1833,9 +1864,9 @@ main() {
     dry_note "1. copy publish output '${SOURCE_DIR}' -> '${TARGET_DIR}'"
     dry_note "2. restore the instance's own appsettings.json into '${TARGET_DIR}'"
     dry_note "3. compare every file (sha256) between source and target, excluding appsettings.json"
-    dry_note "4. atomically rewrite '${DROPIN}' (WorkingDirectory + ExecStart path; Vlm env lines verbatim)"
+    dry_note "4. atomically rewrite '${UNIT_FILE}' (WorkingDirectory + ExecStart path; Vlm env lines verbatim)"
     dry_note "5. systemctl --user daemon-reload && systemctl --user restart ${UNIT_NAME}"
-    dry_note "6. verify /proc/<pid>/cwd, /proc/<pid>/exe sha256, drop-in WorkingDirectory, DatabaseName"
+    dry_note "6. verify /proc/<pid>/cwd, /proc/<pid>/exe sha256, unit WorkingDirectory, DatabaseName"
     dry_note "7. verify /health -> 200 and root isolation (200 on own root, 404 on the other instance)"
     dry_note "the previous deploy directory '${OLD_DEPLOY_DIR}' is kept for rollback"
     summary
@@ -1843,7 +1874,7 @@ main() {
   fi
 
   stage2_copy
-  write_dropin
+  write_unit
 
   # Remember where we came from, so --rollback can find it.
   mkdir -p "$DEPLOY_ROOT"

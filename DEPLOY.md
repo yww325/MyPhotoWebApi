@@ -17,13 +17,23 @@ cd /home/yww/.openclaw/workspace/Coding/MyPhotoWebApi
 bash scripts/deploy-instance.sh --check --instance 5000
 bash scripts/deploy-instance.sh --check --instance 5001
 
-# 1) 先做只读预演（不改任何东西）
+# 1) 改动只提交到本地，先确认 Release 能发布（门禁，详见第 4 节）
+dotnet publish MyPhotoWebApi/MyPhotoWebApi.csproj -c Release -o /tmp/pub-check
+
+# 2) 先做只读预演（不改任何东西）
 bash scripts/deploy-instance.sh --instance 5000 --target <commit-sha> --build --dry-run
 
-# 2) 预演通过后再真正部署
+# 3) 预演通过后再真正部署 5000，并确认 /health 返回 200
 bash scripts/deploy-instance.sh --instance 5000 --target <commit-sha> --build
+curl -s http://127.0.0.1:5000/health
 
-# 3) 出问题就回滚
+# 4) 上面都过了才 push
+git push origin main
+
+# 5) 再部署 5001
+bash scripts/deploy-instance.sh --instance 5001 --target <commit-sha> --build
+
+# 6) 出问题就回滚
 bash scripts/deploy-instance.sh --instance 5000 --rollback
 ```
 
@@ -113,45 +123,66 @@ bash scripts/deploy-instance.sh --instance 5000 --rollback
 
 部署是**影响生产的操作**。请严格按下面的顺序，并遵守第 5 节的边界。
 
-### 步骤 1 · 确认代码已推送
+> **push 在第 6 步。** 先本地提交 → Release 发布通过 → 5000 真跑起来且 `/health` 200，
+> 才允许 push 到 main。这条门禁与 [AGENTS.md](AGENTS.md) 一致。
+
+### 步骤 1 · 同步本地仓库
 ```bash
 cd /home/yww/.openclaw/workspace/Coding/MyPhotoWebApi
-git fetch origin
-git log --oneline -1 origin/main
-```
-部署目录名要用**已经 push 的 commit**。未 push 的 commit 部署出去，等于把只存在于本机的代码变成生产代码。
-
-### 步骤 2 · 同步本地仓库
-```bash
 git checkout main && git pull --ff-only origin main
 ```
 > 注意：**`git pull` 对生产没有任何影响**。生产跑的是 `/home/yww/deploy/` 里的文件，
 > 既不是 git 检出、也不受 git 管辖。「拉了新 commit」到「生产跑上新代码」之间，
 > 还隔着「跑一次部署脚本」这一步。
 
-### 步骤 3 · 只读预演
+### 步骤 2 · 改动只提交到本地，先不 push
+```bash
+git add <具体文件>        # 不要 git add . / -A
+git commit -m "..."
+git log --oneline -1
+```
+下面几步用这个 commit 的短 sha 作为 `--target`。
+
+### 步骤 3 · Release 发布必须通过（门禁）
+```bash
+dotnet publish MyPhotoWebApi/MyPhotoWebApi.csproj -c Release -o /tmp/pub-check
+```
+必须 0 error。**不要用 `dotnet build` 代替**：它默认走 Debug，而部署脚本跑的是
+`dotnet publish -c Release`，两者完全可能一个过一个挂——ImageSharp 3.2.0 新增的
+license 校验就只对 Release 生效（Debug 下 `ContinueOnError=true` 静默放过）。
+失败就停下来改，不要 push。
+
+### 步骤 4 · 只读预演
 ```bash
 bash scripts/deploy-instance.sh --instance 5000 --target <commit-sha> --build --dry-run
 ```
 逐行读输出。**必须确认 `RESULT: ALL CHECKS PASSED` 且 `failures : 0`。**
 有任何 FAIL 就停下来报告，不要继续。
 
-### 步骤 4 · 真正部署
+### 步骤 5 · 部署 5000 并复核
 ```bash
 bash scripts/deploy-instance.sh --instance 5000 --target <commit-sha> --build
 ```
 再确认一次 `RESULT: ALL CHECKS PASSED`。脚本会打印新的 deploy 目录和保留的旧目录。
-
-### 步骤 5 · 独立复核
-脚本自己会验，但建议再手工看一眼：
+然后手工复核：
 ```bash
 export XDG_RUNTIME_DIR=/run/user/$(id -u)
 systemctl --user status myphoto5000 --no-pager | head -5
 curl -s http://127.0.0.1:5000/health
 journalctl --user -u myphoto5000 -n 40 --no-pager
 ```
+`/health` 必须 200 且 body 含 `"status":"ok"`。**没到这一步，不许 push。**
 
-### 步骤 6 · 部署第二个实例
+### 步骤 6 · 才 push
+```bash
+git push origin main
+git fetch origin && git log --oneline -1 origin/main    # 复核远端 head == 本地
+```
+部署目录名用的就是这个 commit sha，push 之后它同时是「已上线」和「已在 origin」的版本。
+如果 push 被拒（远端已前进），**不要 force**：先把远端合进来、重新走一遍 3～5 步，
+否则生产会跑一个不在 origin 上的 commit。
+
+### 步骤 7 · 部署第二个实例
 实例 2 是**完全独立**的一次部署，要单独跑一遍脚本：
 ```bash
 bash scripts/deploy-instance.sh --instance 5001 --target <commit-sha> --build --dry-run
@@ -175,6 +206,8 @@ bash scripts/deploy-instance.sh --instance 5001 --target <commit-sha> --build
   脚本的阶段 1 和阶段 3 都会拦这个。
 - **不要**用 `git add .` / `git add -A` 提交；精确 add 文件。
 - **不要**在没有 dry-run 通过的情况下直接跑真实部署。
+- **不要**在 Release 发布未通过、或 5000 尚未跑通（`/health` 非 200）时 push 到 main；
+  push 被拒时也不要 force，见第 4 节步骤 6。
 
 ---
 
@@ -237,4 +270,4 @@ systemctl --user daemon-reload && systemctl --user restart myphoto5000
 
 ---
 
-*文档更新日期：2026-10-28*
+*文档更新日期：2026-10-31*

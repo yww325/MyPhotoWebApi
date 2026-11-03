@@ -39,19 +39,36 @@ cd MyPhotoAdmin
 
 签名用的 keystore 是 MyPhotoAdmin 这套 App 的**唯一身份**，换一个 key 就没法覆盖安装（详见 3.3）。
 
-| 位置 | 用途 |
-|---|---|
-| `/home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/MyPhotoAdmin.keystore` | 构建机上的副本，实际签名用它。仓库 `.gitignore` 里已经有 `*.keystore` / `*.jks`，不会被提交 |
-| （可选）GitHub `yww325/MyPhotoAdmin` 的 Actions secret `MYPHOTOADMIN_KEYSTORE_BASE64` | 想接 CI 自动构建时用。需要仓库 admin 权限，命令见下；secret 只能写、不能读回 |
+**构建机上**（实际签名用这份，权限 `600`）：
 
-想往 GitHub 存一份的话（需要有该仓库 admin 权限的个人 token，Amp 这类 GitHub App 集成 token 会返回 403）：
-
-```bash
-base64 -w0 MyPhotoAdmin.keystore \
-  | gh secret set MYPHOTOADMIN_KEYSTORE_BASE64 --repo yww325/MyPhotoAdmin
+```
+/home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/MyPhotoAdmin.keystore
 ```
 
-这台 keystore 就是标准的 Android debug key，别名和密码都是公开约定：
+仓库 `.gitignore` 里有 `*.keystore` / `*.jks`，不会被提交。
+
+**GitHub secrets**（仓库 `yww325/MyPhotoAdmin`，用于长期备份和以后接 CI）：
+
+| secret | 内容 |
+|---|---|
+| `MYPHOTOADMIN_KEYSTORE_BASE64` | keystore 文件的 base64 |
+| `MYPHOTOADMIN_KEYSTORE_PASSWORD` | keystore 密码 |
+| `MYPHOTOADMIN_KEY_ALIAS` | key 别名 |
+| `MYPHOTOADMIN_KEY_PASSWORD` | key 密码 |
+
+一次建好（需要该仓库 **admin 权限的个人 token**；Amp 这类 GitHub App 集成的 token 没有 Actions secrets 权限，会返回 403）：
+
+```bash
+cd /home/yww/.openclaw/workspace/Coding/MyPhotoWebApi
+base64 -w0 MyPhotoAdmin.keystore | gh secret set MYPHOTOADMIN_KEYSTORE_BASE64 --repo yww325/MyPhotoAdmin
+gh secret set MYPHOTOADMIN_KEYSTORE_PASSWORD --repo yww325/MyPhotoAdmin --body android
+gh secret set MYPHOTOADMIN_KEY_ALIAS --repo yww325/MyPhotoAdmin --body androiddebugkey
+gh secret set MYPHOTOADMIN_KEY_PASSWORD --repo yww325/MyPhotoAdmin --body android
+```
+
+secret 只能写、不能读回；换 keystore 时四个要一起更新。
+
+这台 keystore 就是标准的 Android debug key，别名和密码都是公开约定（也就是上面两个值）：
 
 ```
 keystore 密码: android
@@ -62,7 +79,7 @@ key 密码:      android
 它不是「安全密钥」，价值在于**一直用同一把**：复制、备份都行，别重新生成。
 
 > **keystore 丢了怎么办**：只能生成新 key，代价是所有用户必须卸载重装（Android 不允许换签名的覆盖安装）。
-> 所以除了构建机上那份，最好再备份到一个不会随机器消失的地方（GitHub secret 就是为此准备的，但记得它读不回来）。
+> 所以除了构建机上那份，一定要在别处留一份备份（GitHub secrets 就是干这个的，但记得它读不回来）。
 
 ### 3.2 签名命令
 

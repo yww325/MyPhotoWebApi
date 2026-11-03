@@ -20,6 +20,7 @@
     - `FileUrl`：原图的访问前缀，默认 `/File`。
     - `ConnectionString` / `DatabaseName`：MongoDB 连接（本机 `127.0.0.1:27017`）。
     - `UserPassLocation`：密码文件的**绝对路径**。程序**只在启动时**读取一次，并保存它的 MD5；修改密码后需要重启服务。
+    - `ApkFolder`：存放 App 安装包的目录（**绝对路径**），默认 `/home/yww/FtpRoot/ApkFolder`。目录里放 `version.json`（描述当前发布的版本）和对应的 `.apk` 文件，App 用 `GET /api/v1/Update/latest` 得到版本信息并下载安装包（见第 3 节“应用更新”）。
     - `Vlm`：AI 标签使用的视觉模型（见第 3 节“AI 标签”），通过 OpenAI 兼容的 `chat/completions` 接口调用，换厂商只需改配置：
         - `BaseUrl`：默认 `https://generativelanguage.googleapis.com/v1beta/openai/`（Google Gemini）。
         - `Model`：默认 `gemini-3.1-flash-lite`。
@@ -27,7 +28,7 @@
         - `MaxRequestsPerMinute`：调用模型的速率上限，默认每分钟 10 次（Google 免费层每分钟只允许少量请求）。同一实例的所有请求共用这个限速。
         - `ReasoningEffort`：默认 `minimal`，让思考 token（按输出计费）接近 0；厂商不支持时设为空字符串即可不发送。
 - **OData 路由**：挂载在 `/odata/v1` 前缀下，实体集为 `Photos` 和 `Folders`，元数据地址为 `/odata/v1/$metadata`。
-- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders` 三个控制器），包括上传 `POST /api/v1/Photos/upload`、目录树 `GET /api/v1/Folders/tree`、目录内容 `GET /api/v1/Photos/thumbs` 、删除照片 `DELETE /api/v1/Photos`、移动照片 `POST /api/v1/Photos/move-to`、AI 标签 `POST /api/v1/Photos/ai-tags`、修改标签 `PUT /api/v1/Photos/tags`、照片详情 `GET /api/v1/Photos/details` 和删除空目录 `DELETE /api/v1/Folders/empty`（见第 3 节）。
+- **REST 接口**：`/api/v1/...`（`Default`、`Photos`、`Folders`、`Update` 四个控制器），包括上传 `POST /api/v1/Photos/upload`、目录树 `GET /api/v1/Folders/tree`、目录内容 `GET /api/v1/Photos/thumbs` 、删除照片 `DELETE /api/v1/Photos`、移动照片 `POST /api/v1/Photos/move-to`、AI 标签 `POST /api/v1/Photos/ai-tags`、修改标签 `PUT /api/v1/Photos/tags`、照片详情 `GET /api/v1/Photos/details`、删除空目录 `DELETE /api/v1/Folders/empty` 和应用更新 `GET /api/v1/Update/latest`（见第 3 节）。
 - **健康检查**：`/health`，返回 `{"status":"ok","mongo":"ok"}`，会顺带检查 MongoDB 是否可用。
 - **原图**：由程序自己的静态文件中间件（`UseStaticFiles`）从 `RootFolder` 提供，路径为 `/File/<相对路径>`，支持 Range 请求，不提供目录列表。
 - **Swagger**：使用 **NSwag 14**（`AddOpenApiDocument` + `UseOpenApi` + `UseSwaggerUi`），生成 OpenAPI 3.0 文档。
@@ -124,6 +125,30 @@
 - 与上传时创建目录互斥，不会出现删到一半又被上传重新建出来的情况。
 - 旧的 `DELETE /api/v1/Folders?folderPath=...` 不变：它删除整个目录分支下所有目录和照片的**数据库记录**，磁盘上的文件和目录都保留，客户端不要用它来删目录。
 
+### 应用更新：`GET /api/v1/Update/latest` 和 `GET /api/v1/Update/apk/{fileName}`
+- 服务器可以发布 App 的新版本：把安装包和描述它的 `version.json` 放进 `ApkFolder`（配置项 `MyPhotoSettings:ApkFolder`）就行。
+- `version.json` 的格式：
+  ```json
+  {
+    "version": "1.0.0",
+    "versionCode": 1,
+    "fileName": "MyPhotoAdmin-1.0.0.apk",
+    "notes": "这次更新改了什么",
+    "releasedAt": "2026-11-03T10:00:00+08:00"
+  }
+  ```
+  `fileName` 可以省略，默认是 `MyPhotoAdmin-{version}.apk`；`notes` 和 `releasedAt` 可以省略。
+- `GET /api/v1/Update/latest` 返回当前发布的版本，200：
+  ```json
+  {"version":"1.0.0","versionCode":1,"fileName":"MyPhotoAdmin-1.0.0.apk","size":12345678,"notes":"...","releasedAt":"...","downloadUrl":"api/v1/Update/apk/MyPhotoAdmin-1.0.0.apk"}
+  ```
+  客户端比较 `versionCode` 和自己的 `versionCode`（Android 的版本号），服务器的大就提示更新。`downloadUrl` 是**相对于 API 根目录**的路径，客户端把它拼在服务器地址（末尾带斜杠）后面。
+- `GET /api/v1/Update/apk/{fileName}` 下载安装包：`Content-Type: application/vnd.android.package-archive`，支持 Range 请求。
+- 这两个接口**都不需要密码**：App 没登录时也能检查更新。
+- 服务器还没有发布版本时（没有 `version.json`、`version.json` 解析不了、或者它指名的 apk 不在目录里），`latest` 返回 404，body 是 `{"message":"The server has not published an update yet."}`。
+- 只接受目录里的 `.apk` 文件名，名字里带目录符号的一律 404。
+- 发布新版本不用重启服务：`version.json` 和 apk 都是每次请求时现读的。
+
 ## 4. 部署与反向代理 (Nginx)
 Nginx 作为入口网关，模拟 IIS 虚拟目录行为。配置文件为 `/etc/nginx/sites-enabled/default`，其中有三个 server 块：
 
@@ -190,6 +215,7 @@ location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
     `appsettings.json`（读自 ContentRoot，即进程工作目录）→ `appsettings.{Environment}.json` → user secrets（仅 Development）→ 环境变量（`__` 作层级分隔符，`MyPhotoSettings__Vlm__Model` ≡ `MyPhotoSettings:Vlm:Model`）→ 命令行参数。
 - **改配置的正规做法**：改 drop-in，然后 `systemctl --user daemon-reload` + `systemctl --user restart myphoto5001`。
     不要手改发布目录里的 `appsettings.json`（下次 publish 会被覆盖），也不要改 base unit 的路径（base unit 指向 deploy 目录，正是为了让 drop-in 失效时也能正确回退）。
+- **仓库里的 `appsettings.json` 只是模板**：生产实例读的是部署目录里那一份。仓库里新增的配置项（例如 `ApkFolder`）要**另外**加到生产实例的 `appsettings.json` 里，否则线上读不到。
 
 ## 6. 访问路径汇总
 域名 `yww325.eu.org` 解析到本机公网 IP `20.214.10.34`。下面的路径对 `https://yww325.eu.org` 和 `http://20.214.10.34` 都适用：
@@ -199,6 +225,7 @@ location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {
 - **OData 元数据**：`/MyPhotos/odata/v1/$metadata`
 - **OData 查询示例**：`/MyPhotos/odata/v1/Folders`、`/MyPhotos/odata/v1/Photos?$top=10`
 - **密码校验**：`/MyPhotos/api/v1/Default/validate?userPass=<明文密码>`
+- **应用更新**：`/MyPhotos/api/v1/Update/latest`（安装包在 `/MyPhotos/api/v1/Update/apk/<文件名>`）
 - **健康检查**：`/MyPhotos/health`
 - **原图**：`/File/<相对路径>`（也可以用 `/MyPhotos/File/<相对路径>`）；实例 2 为 `/File2/<相对路径>`
 

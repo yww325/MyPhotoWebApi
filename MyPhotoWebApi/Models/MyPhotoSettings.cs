@@ -8,6 +8,9 @@
         public string FileUrl { get; set; }
         public string UserPassLocation { get; set; }
         public VlmSettings Vlm { get; set; } = new();
+
+        /// <summary>Absolute path of the folder holding the app's APKs and the version.json describing them.</summary>
+        public string? ApkFolder { get; set; }
     }
 
     /// <summary>The vision model that suggests AI tags, called through an OpenAI-compatible chat completions API.</summary>

@@ -185,6 +185,7 @@ namespace MyPhotoWebApi
             services.AddSingleton<FileIngestionService, FileIngestionService>();
             services.AddSingleton<PhotoService, PhotoService>();
             services.AddSingleton<FolderService, FolderService>();            
+            services.AddSingleton<UpdateService, UpdateService>();
             services.AddSingleton<AiTagService, AiTagService>();
             services.AddHttpClient(nameof(AiTagService), c => c.Timeout = TimeSpan.FromSeconds(60));
             services.AddSingleton<IMongoClient, MongoClient>(sp => 

@@ -148,6 +148,7 @@
 - 服务器还没有发布版本时（没有 `version.json`、`version.json` 解析不了、或者它指名的 apk 不在目录里），`latest` 返回 404，body 是 `{"message":"The server has not published an update yet."}`。
 - 只接受目录里的 `.apk` 文件名，名字里带目录符号的一律 404。
 - 发布新版本不用重启服务：`version.json` 和 apk 都是每次请求时现读的。
+- 发新版本的完整步骤（构建、签名、上传、`version.json`、验证、回滚）见 [VersionUpdate.md](VersionUpdate.md)。
 
 ## 4. 部署与反向代理 (Nginx)
 Nginx 作为入口网关，模拟 IIS 虚拟目录行为。配置文件为 `/etc/nginx/sites-enabled/default`，其中有三个 server 块：

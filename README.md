@@ -8,6 +8,7 @@ front end code at
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 架构、接口、配置来源、nginx 与 systemd 说明
 - [DEPLOY.md](DEPLOY.md) — **部署指南**：用 `scripts/deploy-instance.sh` 部署到运行中的实例
+- [VersionUpdate.md](VersionUpdate.md) — **发布 App 新版本**：签名用的 keystore、构建、上传 APK 和 version.json
 
 ## 部署
 

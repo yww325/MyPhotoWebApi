@@ -65,3 +65,7 @@ obj/
 publish/
 # Local SDK / API keys (contains a Google Maps API key - never commit)
 local.properties
+
+# App signing keystore: stays on the build machine (see VersionUpdate.md)
+*.keystore
+*.jks

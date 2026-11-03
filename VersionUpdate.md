@@ -68,6 +68,11 @@ gh secret set MYPHOTOADMIN_KEY_PASSWORD --repo yww325/MyPhotoAdmin --body androi
 
 secret 只能写、不能读回；换 keystore 时四个要一起更新。
 
+不想用命令行的话，在网页上手动加也一样：打开
+`https://github.com/yww325/MyPhotoAdmin/settings/secrets/actions` → 右上 **New repository secret** →
+填 Name 和 Secret → **Add secret**，重复四次。`MYPHOTOADMIN_KEYSTORE_BASE64` 的值要在构建机上先跑
+`base64 -w0 MyPhotoAdmin.keystore` 拿到（3492 个字符、必须是一行，不能换行）。
+
 这台 keystore 就是标准的 Android debug key，别名和密码都是公开约定（也就是上面两个值）：
 
 ```

@@ -39,13 +39,8 @@ cd MyPhotoAdmin
 
 签名用的 keystore 是 MyPhotoAdmin 这套 App 的**唯一身份**，换一个 key 就没法覆盖安装（详见 3.3）。
 
-**构建机上**（实际签名用这份，权限 `600`）：
-
-```
-/home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/MyPhotoAdmin.keystore
-```
-
-仓库 `.gitignore` 里有 `*.keystore` / `*.jks`，不会被提交。
+它**不在仓库里**（`.gitignore` 里有 `*.keystore` / `*.jks`），只放在做签名的那台机器上（权限 `600`），
+外加下面的 GitHub secrets 备份。
 
 **GitHub secrets**（仓库 `yww325/MyPhotoAdmin`，用于长期备份和以后接 CI）：
 
@@ -59,7 +54,6 @@ cd MyPhotoAdmin
 一次建好（需要该仓库 **admin 权限的个人 token**；Amp 这类 GitHub App 集成的 token 没有 Actions secrets 权限，会返回 403）：
 
 ```bash
-cd /home/yww/.openclaw/workspace/Coding/MyPhotoWebApi
 base64 -w0 MyPhotoAdmin.keystore | gh secret set MYPHOTOADMIN_KEYSTORE_BASE64 --repo yww325/MyPhotoAdmin
 gh secret set MYPHOTOADMIN_KEYSTORE_PASSWORD --repo yww325/MyPhotoAdmin --body android
 gh secret set MYPHOTOADMIN_KEY_ALIAS --repo yww325/MyPhotoAdmin --body androiddebugkey
@@ -70,7 +64,7 @@ secret 只能写、不能读回；换 keystore 时四个要一起更新。
 
 不想用命令行的话，在网页上手动加也一样：打开
 `https://github.com/yww325/MyPhotoAdmin/settings/secrets/actions` → 右上 **New repository secret** →
-填 Name 和 Secret → **Add secret**，重复四次。`MYPHOTOADMIN_KEYSTORE_BASE64` 的值要在构建机上先跑
+填 Name 和 Secret → **Add secret**，重复四次。`MYPHOTOADMIN_KEYSTORE_BASE64` 的值要在存有 keystore 的机器上先跑
 `base64 -w0 MyPhotoAdmin.keystore` 拿到（3492 个字符、必须是一行，不能换行）。
 
 这台 keystore 就是标准的 Android debug key，别名和密码都是公开约定（也就是上面两个值）：
@@ -88,19 +82,29 @@ key 密码:      android
 等于没设防），也就是能给已装用户推一个假的「更新」。把密码放进 secret 无害，但对 debug key 来说
 并不会增加保护——文件不进仓库、不放到公开位置才是关键。
 
-想要真正的保护，得自己生成一把 release keystore（强密码、密码放 secret，文件只留在构建机和备份里），
+想要真正的保护，得自己生成一把 release keystore（强密码、密码放 secret，文件只留在可信的机器和备份里），
 代价是换 key 之后所有已装用户要卸载重装一次。
 
 > **keystore 丢了怎么办**：只能生成新 key，代价是所有用户必须卸载重装（Android 不允许换签名的覆盖安装）。
-> 所以除了构建机上那份，一定要在别处留一份备份（GitHub secrets 就是干这个的，但记得它读不回来）。
+> 所以除了本机那份，一定要在别处留一份备份（GitHub secrets 就是干这个的，但记得它读不回来）。
 
 ### 3.2 签名命令
 
+先把 keystore 放到做签名的那台机器上（例如 `~/myphoto/MyPhotoAdmin.keystore`，`chmod 600`），
+再确认拿对了文件：
+
+```bash
+sha256sum ~/myphoto/MyPhotoAdmin.keystore   # 应为 9aba8ed5632f93ae04666db1261dfe6d12be4a9f7ebf7dc61961582554f8e314
+```
+
+然后签名：
+
 ```bash
 cd MyPhotoAdmin
+KS=~/myphoto/MyPhotoAdmin.keystore
 BT=$ANDROID_HOME/build-tools/37.0.0
 $BT/apksigner sign \
-  --ks /home/yww/.openclaw/workspace/Coding/MyPhotoWebApi/MyPhotoAdmin.keystore \
+  --ks "$KS" \
   --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey \
   --out MyPhotoAdmin-1.0.2.apk \
   app/build/outputs/apk/release/app-release-unsigned.apk
@@ -120,7 +124,7 @@ sha256sum MyPhotoAdmin-1.0.2.apk
 不是这个值就说明用错了 keystore，装上去会覆盖失败。
 
 > **keystore 丢了怎么办**：GitHub secret 只能读给 Actions 用、不能读回内容。真丢了就只能生成新 key，
-> 代价是所有用户必须卸载重装（Android 不允许换签名的覆盖安装）。所以除了 secret，构建机上也留一份工作副本。
+> 代价是所有用户必须卸载重装（Android 不允许换签名的覆盖安装）。所以除了 secret，做签名的那台机器上也留一份工作副本。
 
 ### 3.3 换 key 的后果
 

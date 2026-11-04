@@ -39,8 +39,8 @@ cd MyPhotoAdmin
 
 签名用的 keystore 是 MyPhotoAdmin 这套 App 的**唯一身份**，换一个 key 就没法覆盖安装（详见 3.3）。
 
-它**不在仓库里**（`.gitignore` 里有 `*.keystore` / `*.jks`），只放在做签名的那台机器上（权限 `600`），
-外加下面的 GitHub secrets 备份。
+它**不在仓库里**（`.gitignore` 里有 `*.keystore` / `*.jks`），备份在下面说的 GitHub secrets 里；
+需要签名时再把文件还原出来（见 3.2），用完删掉。
 
 **GitHub secrets**（仓库 `yww325/MyPhotoAdmin`，用于长期备份和以后接 CI）：
 
@@ -60,7 +60,9 @@ gh secret set MYPHOTOADMIN_KEY_ALIAS --repo yww325/MyPhotoAdmin --body androidde
 gh secret set MYPHOTOADMIN_KEY_PASSWORD --repo yww325/MyPhotoAdmin --body android
 ```
 
-secret 只能写、不能读回；换 keystore 时四个要一起更新。
+secret 只能写、**不能读回**：GitHub 的 API 不返回 secret 的值（`gh` 只有 `secret list/set/delete`，
+没有 `secret get`），所以 secret 只能给 Actions 用。要在本地还原 keystore 文件，只能跑一次
+workflow 把 secret 解码成文件（见 3.2）；或者自己另留一份。换 keystore 时四个 secret 要一起更新。
 
 不想用命令行的话，在网页上手动加也一样：打开
 `https://github.com/yww325/MyPhotoAdmin/settings/secrets/actions` → 右上 **New repository secret** →
@@ -85,17 +87,35 @@ key 密码:      android
 想要真正的保护，得自己生成一把 release keystore（强密码、密码放 secret，文件只留在可信的机器和备份里），
 代价是换 key 之后所有已装用户要卸载重装一次。
 
-> **keystore 丢了怎么办**：只能生成新 key，代价是所有用户必须卸载重装（Android 不允许换签名的覆盖安装）。
-> 所以除了本机那份，一定要在别处留一份备份（GitHub secrets 就是干这个的，但记得它读不回来）。
-
 ### 3.2 签名命令
 
-先把 keystore 放到做签名的那台机器上（例如 `~/myphoto/MyPhotoAdmin.keystore`，`chmod 600`），
+**先把 keystore 放到做签名的那台机器上**（例如 `~/myphoto/MyPhotoAdmin.keystore`，`chmod 600`），
 再确认拿对了文件：
 
 ```bash
 sha256sum ~/myphoto/MyPhotoAdmin.keystore   # 应为 9aba8ed5632f93ae04666db1261dfe6d12be4a9f7ebf7dc61961582554f8e314
 ```
+
+文件不在手上时，用一个临时 workflow 从 secret 还原（Actions 里 secret 是可以读的）：
+
+```yaml
+# .github/workflows/get-keystore.yml —— 跑完把 artifact 下载下来，用完删掉这个 workflow
+name: get-keystore
+on: workflow_dispatch
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ secrets.MYPHOTOADMIN_KEYSTORE_BASE64 }}" | base64 -d > MyPhotoAdmin.keystore
+      - run: sha256sum MyPhotoAdmin.keystore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: myphotoadmin-keystore
+          path: MyPhotoAdmin.keystore
+```
+
+下载下来的 artifact 解压后就是 keystore（`chmod 600`），核对 sha256 是
+`9aba8ed5632f93ae04666db1261dfe6d12be4a9f7ebf7dc61961582554f8e314` 才是对的那把。
 
 然后签名：
 
@@ -123,8 +143,9 @@ sha256sum MyPhotoAdmin-1.0.2.apk
 `e5c3005a004f0cb3dc7177700af137d4e6749b93ef4364f98259510f7d5a6897`（当前这把 key）。
 不是这个值就说明用错了 keystore，装上去会覆盖失败。
 
-> **keystore 丢了怎么办**：GitHub secret 只能读给 Actions 用、不能读回内容。真丢了就只能生成新 key，
-> 代价是所有用户必须卸载重装（Android 不允许换签名的覆盖安装）。所以除了 secret，做签名的那台机器上也留一份工作副本。
+> **keystore 丢了怎么办**：GitHub secret 只能读给 Actions 用、读不回内容，所以它不是一份可以直接取回的备份。
+> 真丢了就只能生成新 key，代价是所有用户必须卸载重装（Android 不允许换签名的覆盖安装）。
+> 建议除了 secret，再在别处（例如密码管理器或离线硬盘）留一份 keystore 文件。
 
 ### 3.3 换 key 的后果
 

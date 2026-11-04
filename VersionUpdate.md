@@ -1,6 +1,6 @@
 # 发布 App 新版本（VersionUpdate）
 
-本文记录怎么把一个新版 MyPhotoAdmin 发到服务器上，让手机上已装的旧版能通过「检测更新」按钮升级。服务端的接口说明见 [ARCHITECTURE.md](ARCHITECTURE.md) 的「应用更新」一节。
+本文记录怎么把一个新版 MyPhotoAdmin 发到服务器上，让手机上已装的旧版能通过「检测更新」按钮升级。服务端的接口说明见 MyPhotoWebApi 仓库的 `ARCHITECTURE.md` 的「应用更新」一节（同一份文档也保存在那个仓库里）。
 
 ## 流程总览
 
@@ -37,12 +37,13 @@ cd MyPhotoAdmin
 
 ### 3.1 keystore 在哪
 
-签名用的 keystore 是 MyPhotoAdmin 这套 App 的**唯一身份**，换一个 key 就没法覆盖安装（详见 3.3）。
+签名用的 keystore 是 MyPhotoAdmin 这套 App 的**唯一身份**，换一个 key 就没法覆盖安装（详见 3.4）。
 
 它**不在仓库里**（`.gitignore` 里有 `*.keystore` / `*.jks`），备份在下面说的 GitHub secrets 里；
-需要签名时再把文件还原出来（见 3.2），用完删掉。
+需要签名时再把文件还原出来（见 3.2 / 3.3），用完删掉。
 
-**GitHub secrets**（仓库 `yww325/MyPhotoAdmin`，用于长期备份和以后接 CI）：
+**GitHub secrets**（仓库 `yww325/MyPhotoAdmin`）：构建和签名已经在 Actions 上做，keystore 只在 runner 里
+从 secret 还原、用完即焚，机器上不留文件。secret 同时是这把 key 的备份：
 
 | secret | 内容 |
 |---|---|
@@ -51,7 +52,8 @@ cd MyPhotoAdmin
 | `MYPHOTOADMIN_KEY_ALIAS` | key 别名 |
 | `MYPHOTOADMIN_KEY_PASSWORD` | key 密码 |
 
-一次建好（需要该仓库 **admin 权限的个人 token**；Amp 这类 GitHub App 集成的 token 没有 Actions secrets 权限，会返回 403）：
+这四个 secret 已经建好（需要该仓库 **admin 权限的个人 token**；Amp 这类 GitHub App 集成的 token 没有
+Actions secrets 权限，会返回 403）：
 
 ```bash
 base64 -w0 MyPhotoAdmin.keystore | gh secret set MYPHOTOADMIN_KEYSTORE_BASE64 --repo yww325/MyPhotoAdmin
@@ -62,7 +64,7 @@ gh secret set MYPHOTOADMIN_KEY_PASSWORD --repo yww325/MyPhotoAdmin --body androi
 
 secret 只能写、**不能读回**：GitHub 的 API 不返回 secret 的值（`gh` 只有 `secret list/set/delete`，
 没有 `secret get`），所以 secret 只能给 Actions 用。要在本地还原 keystore 文件，只能跑一次
-workflow 把 secret 解码成文件（见 3.2）；或者自己另留一份。换 keystore 时四个 secret 要一起更新。
+workflow 把 secret 解码成文件（见 3.3）；或者自己另留一份。换 keystore 时四个 secret 要一起更新。
 
 不想用命令行的话，在网页上手动加也一样：打开
 `https://github.com/yww325/MyPhotoAdmin/settings/secrets/actions` → 右上 **New repository secret** →
@@ -87,7 +89,27 @@ key 密码:      android
 想要真正的保护，得自己生成一把 release keystore（强密码、密码放 secret，文件只留在可信的机器和备份里），
 代价是换 key 之后所有已装用户要卸载重装一次。
 
-### 3.2 签名命令
+### 3.2 构建和签名（走 Actions）
+
+仓库里已经有一个 workflow 干这件事：`.github/workflows/build-release.yml`。它自己还原 keystore、
+构建、用 `apksigner` 签名、把签好的 APK 作为 artifact 上传。手动跑一次：
+
+```bash
+export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"     # gh 在 homebrew 前缀里，不在默认 PATH
+gh workflow run build-release.yml -f version_code=3 -f version_name=1.0.2 --repo yww325/MyPhotoAdmin
+gh run watch <run-id> --repo yww325/MyPhotoAdmin
+gh run download <run-id> -n myphotoadmin-1.0.2-apk -D /tmp/apk
+```
+
+`version_code` 必须比当前发布的那个大。日志里要核对三行：keystore 的 sha256、
+`aapt2 dump badging` 的 `versionCode`/`versionName`、以及 `apksigner verify` 的证书指纹。
+
+> 注意：`setup-android` 动作默认要装已被 Google 下架的 `tools` 包，所以 workflow 里必须显式写
+> `packages: 'platform-tools platforms;android-37.0 build-tools;37.0.0'`，否则 SDK 这步就会失败。
+
+本地有 Android SDK 的话也可以自己签（keystore 文件得先从 secret 还原，见 3.3）。
+
+### 3.3 在本地签名
 
 **先把 keystore 放到做签名的那台机器上**（例如 `~/myphoto/MyPhotoAdmin.keystore`，`chmod 600`），
 再确认拿对了文件：
@@ -147,7 +169,7 @@ sha256sum MyPhotoAdmin-1.0.2.apk
 > 真丢了就只能生成新 key，代价是所有用户必须卸载重装（Android 不允许换签名的覆盖安装）。
 > 建议除了 secret，再在别处（例如密码管理器或离线硬盘）留一份 keystore 文件。
 
-### 3.3 换 key 的后果
+### 3.4 换 key 的后果
 
 Android 只允许**同一签名**的 APK 覆盖安装。签名不一致时安装会失败（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`），
 用户必须先卸载旧版，数据（App 里的设置、登录令牌）也会丢。所以：
@@ -155,7 +177,7 @@ Android 只允许**同一签名**的 APK 覆盖安装。签名不一致时安装
 - 同一台手机上装的所有版本必须用同一把 keystore；
 - 不要因为「debug key 不好看」就换成新生成的 release key，除非愿意让所有人卸载重装。
 
-### 3.4 安装权限
+### 3.5 安装权限
 
 手机上第一次安装来自浏览器/文件管理器的 APK 时，系统会要求给那个应用「允许安装未知应用」。
 App 内更新走的是系统安装界面，同一个开关。这个开关是系统行为，App 这边不需要额外处理（`REQUEST_INSTALL_PACKAGES` 已经声明）。
@@ -240,6 +262,6 @@ sed -i 's/"versionCode": 3/"versionCode": 2/; s/"version": "1.0.2"/"version": "1
 |---|---|
 | `latest` 返回 404 `The server has not published an update yet.` | `ApkFolder` 没配、`version.json` 不存在 / JSON 坏了 / 它指的 APK 不在目录里（这几种情况服务端都会写日志） |
 | App 说「已经是最新版本」 | `versionCode` 没有比 App 的大 |
-| 安装时报签名冲突 | APK 用的 keystore 和手机上已装的不是同一把（见 3.3） |
+| 安装时报签名冲突 | APK 用的 keystore 和手机上已装的不是同一把（见 3.4） |
 | 下载 404 | 文件名和 `version.json` 里的 `fileName` 对不上，或者带了路径分隔符 |
 | 下载中断 | 接口支持 Range，可以续传；nginx 那段的 `proxy_read_timeout` 是 1200s |

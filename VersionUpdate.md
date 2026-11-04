@@ -1,46 +1,111 @@
 # 发布 App 新版本（VersionUpdate）
 
-本文记录怎么把一个新版 MyPhotoAdmin 发到服务器上，让手机上已装的旧版能通过「检测更新」按钮升级。服务端的接口说明见 MyPhotoWebApi 仓库的 `ARCHITECTURE.md` 的「应用更新」一节（同一份文档也保存在那个仓库里）。
+本文记录怎么把一个新版 MyPhotoAdmin 发到服务器上，让手机上已装的旧版能通过「检测更新」按钮升级。服务端的接口说明见 MyPhotoWebApi 仓库的 `ARCHITECTURE.md` 的「应用更新」一节。
 
 ## 流程总览
 
 ```
-改版本号 → 构建 APK → 用固定 keystore 签名 → 放进服务器的 ApkFolder → 写 version.json → 验证
+定版本号 → Actions 里构建并用 secret 里的 keystore 签名 → 下载产物
+        → 放进服务器的 ApkFolder → 写 version.json → 验证
 ```
 
-不需要重启任何服务：`version.json` 和 APK 都是每次请求时现读的。两个实例（5000 / 5001）共用同一个 `ApkFolder`，所以发布一次两边都生效。
+不需要重启任何服务：`version.json` 和 APK 都是每次请求时现读的。两个实例（5000 / 5001）共用同一个
+`ApkFolder`，所以发布一次两边都生效。
+
+`versionCode` 只有在**服务器上的比手机上装的大**时才会提示更新，这是发版最容易踩的一脚。
 
 ## 1. 改版本号
 
-在 MyPhotoAdmin 仓库的 `app/build.gradle.kts` 里：
+用 Actions 构建时，版本号是 workflow 的输入，不用改文件：
+
+```bash
+gh workflow run build-release.yml -f version_code=3 -f version_name=1.0.2 --repo yww325/MyPhotoAdmin
+```
+
+本地构建时，写在 MyPhotoAdmin 仓库的 `app/build.gradle.kts` 里（也可以用 `-PmyphotoVersionCode=`
+和 `-PmyphotoVersionName=` 临时覆盖）：
 
 ```kotlin
 versionCode = 3          // 每次发布必须 +1，只能变大
 versionName = "1.0.2"    // 给人看的版本号
 ```
 
-**`versionCode` 是唯一的判断依据**：服务器上 `version.json` 的 `versionCode` 比手机上装的 App 大，App 才会提示更新；一样或更小只会说「已经是最新版本」。忘了加就会出现「发了新版但没人能更新」的情况。
+**`versionCode` 是唯一的判断依据**：服务器上 `version.json` 的 `versionCode` 比手机上装的 App 大，App
+才会提示更新；一样或更小只会说「已经是最新版本」。忘了加就会出现「发了新版但没人能更新」的情况。
 
-## 2. 构建 APK
+## 2. 构建和签名（走 GitHub Actions）
 
-需要 JDK 17+ 和 Android SDK 37：
+签名用的 keystore 只存在于仓库的 secrets 里，所以构建和签名都在 Actions 上做，机器上不留密钥文件。
+
+仓库里已经有一个 workflow 干这件事：`.github/workflows/build-release.yml`。它自己从 secret 还原 keystore、
+构建、用 `apksigner` 签名、把签好的 APK 作为 artifact 上传。
+
+### 触发一次构建
+
+```bash
+export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"     # gh 在 homebrew 前缀里，不在默认 PATH
+cd /home/yww/Coding/MyPhotoAdmin && git pull --ff-only origin main
+gh workflow run build-release.yml -f version_code=3 -f version_name=1.0.2 --repo yww325/MyPhotoAdmin
+```
+
+`version_code` 必须比当前发布的那个大；`version_name` 是给人看的版本号。版本号通过参数传进构建，
+不用改 `app/build.gradle.kts`。
+
+### 等它跑完
+
+```bash
+gh run list --workflow=build-release.yml --limit 3
+gh run watch <run-id> --exit-status --repo yww325/MyPhotoAdmin
+gh run view <run-id> --repo yww325/MyPhotoAdmin --json status,conclusion,jobs
+```
+
+> `gh run watch` 会打一行 `requesting annotations returned 403 Forbidden` —— 这是 PAT 缺 `checks:read`
+> 权限，**不影响 run 状态、日志和 artifact**，watch 照常工作。用 `gh run view --json status,conclusion`
+> 确认最终结果更可靠。
+
+### 核对日志
+
+```bash
+gh run view <run-id> --repo yww325/MyPhotoAdmin --log > /tmp/run.log
+grep -E "keystore\.jks$|versionCode=|SHA-256 digest:|^[0-9a-f]{64}  MyPhotoAdmin" /tmp/run.log
+```
+
+要核对三样，缺一不可：
+
+- keystore 的 sha256 应为 `9aba8ed5632f93ae04666db1261dfe6d12be4a9f7ebf7dc61961582554f8e314`；
+- `aapt2 dump badging` 那行应是 `versionCode='3' versionName='1.0.2'`；
+- 证书指纹应是 `e5c3005a004f0cb3dc7177700af137d4e6749b93ef4364f98259510f7d5a6897`（**必须和手机上已装
+  版本的是同一把**，否则装不上，见 3.3）。
+
+### 下载产物
+
+```bash
+gh run download <run-id> --repo yww325/MyPhotoAdmin -n myphotoadmin-1.0.2-apk -D /tmp/apk
+ls -l /tmp/apk
+sha256sum /tmp/apk/*.apk          # 应和 CI 日志里的那行一致
+```
+
+> `setup-android` 动作默认要装已被 Google 下架的 `tools` 包，所以 workflow 里必须显式写
+> `packages: 'platform-tools platforms;android-37.0 build-tools;37.0.0'`，否则 SDK 这步就会失败。
+
+### 不想用 Actions 时（本地签）
+
+需要 JDK 17+ 和 Android SDK 37，keystore 文件得先从 secret 还原出来（见 3.2）：
 
 ```bash
 cd MyPhotoAdmin
-./gradlew clean assembleRelease
-# 产物：app/build/outputs/apk/release/app-release-unsigned.apk
+./gradlew clean assembleRelease -PmyphotoVersionCode=3 -PmyphotoVersionName=1.0.2
+# 产物：app/build/outputs/apk/release/app-release-unsigned.apk（未签名，不能直接安装）
 ```
-
-这个 APK 是**未签名**的，不能直接安装，下一步签名。
 
 ## 3. 签名
 
 ### 3.1 keystore 在哪
 
-签名用的 keystore 是 MyPhotoAdmin 这套 App 的**唯一身份**，换一个 key 就没法覆盖安装（详见 3.4）。
+签名用的 keystore 是 MyPhotoAdmin 这套 App 的**唯一身份**，换一个 key 就没法覆盖安装（详见 3.3）。
 
 它**不在仓库里**（`.gitignore` 里有 `*.keystore` / `*.jks`），备份在下面说的 GitHub secrets 里；
-需要签名时再把文件还原出来（见 3.2 / 3.3），用完删掉。
+需要签名时再把文件还原出来（见第 2 节），用完删掉。
 
 **GitHub secrets**（仓库 `yww325/MyPhotoAdmin`）：构建和签名已经在 Actions 上做，keystore 只在 runner 里
 从 secret 还原、用完即焚，机器上不留文件。secret 同时是这把 key 的备份：
@@ -64,7 +129,7 @@ gh secret set MYPHOTOADMIN_KEY_PASSWORD --repo yww325/MyPhotoAdmin --body androi
 
 secret 只能写、**不能读回**：GitHub 的 API 不返回 secret 的值（`gh` 只有 `secret list/set/delete`，
 没有 `secret get`），所以 secret 只能给 Actions 用。要在本地还原 keystore 文件，只能跑一次
-workflow 把 secret 解码成文件（见 3.3）；或者自己另留一份。换 keystore 时四个 secret 要一起更新。
+workflow 把 secret 解码成文件（见第 2 节）；或者自己另留一份。换 keystore 时四个 secret 要一起更新。
 
 不想用命令行的话，在网页上手动加也一样：打开
 `https://github.com/yww325/MyPhotoAdmin/settings/secrets/actions` → 右上 **New repository secret** →
@@ -89,39 +154,12 @@ key 密码:      android
 想要真正的保护，得自己生成一把 release keystore（强密码、密码放 secret，文件只留在可信的机器和备份里），
 代价是换 key 之后所有已装用户要卸载重装一次。
 
-### 3.2 构建和签名（走 Actions）
+### 3.2 把 keystore 从 secret 还原成文件（只在本地签名时需要）
 
-仓库里已经有一个 workflow 干这件事：`.github/workflows/build-release.yml`。它自己还原 keystore、
-构建、用 `apksigner` 签名、把签好的 APK 作为 artifact 上传。手动跑一次：
-
-```bash
-export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"     # gh 在 homebrew 前缀里，不在默认 PATH
-gh workflow run build-release.yml -f version_code=3 -f version_name=1.0.2 --repo yww325/MyPhotoAdmin
-gh run watch <run-id> --repo yww325/MyPhotoAdmin
-gh run download <run-id> -n myphotoadmin-1.0.2-apk -D /tmp/apk
-```
-
-`version_code` 必须比当前发布的那个大。日志里要核对三行：keystore 的 sha256、
-`aapt2 dump badging` 的 `versionCode`/`versionName`、以及 `apksigner verify` 的证书指纹。
-
-> 注意：`setup-android` 动作默认要装已被 Google 下架的 `tools` 包，所以 workflow 里必须显式写
-> `packages: 'platform-tools platforms;android-37.0 build-tools;37.0.0'`，否则 SDK 这步就会失败。
-
-本地有 Android SDK 的话也可以自己签（keystore 文件得先从 secret 还原，见 3.3）。
-
-### 3.3 在本地签名
-
-**先把 keystore 放到做签名的那台机器上**（例如 `~/myphoto/MyPhotoAdmin.keystore`，`chmod 600`），
-再确认拿对了文件：
-
-```bash
-sha256sum ~/myphoto/MyPhotoAdmin.keystore   # 应为 9aba8ed5632f93ae04666db1261dfe6d12be4a9f7ebf7dc61961582554f8e314
-```
-
-文件不在手上时，用一个临时 workflow 从 secret 还原（Actions 里 secret 是可以读的）：
+GitHub 的 API 不返回 secret 的值（`gh` 只有 `secret list/set/delete`，没有 `secret get`），所以还原
+要靠一次 workflow。临时建一个 `.github/workflows/get-keystore.yml`：
 
 ```yaml
-# .github/workflows/get-keystore.yml —— 跑完把 artifact 下载下来，用完删掉这个 workflow
 name: get-keystore
 on: workflow_dispatch
 jobs:
@@ -136,40 +174,11 @@ jobs:
           path: MyPhotoAdmin.keystore
 ```
 
-下载下来的 artifact 解压后就是 keystore（`chmod 600`），核对 sha256 是
-`9aba8ed5632f93ae04666db1261dfe6d12be4a9f7ebf7dc61961582554f8e314` 才是对的那把。
+跑完把 artifact 下载下来解压（就是 keystore 文件，`chmod 600`），核对 sha256 是
+`9aba8ed5632f93ae04666db1261dfe6d12be4a9f7ebf7dc61961582554f8e314` 才是对的那把，**然后把这个
+workflow 文件删掉**。
 
-然后签名：
-
-```bash
-cd MyPhotoAdmin
-KS=~/myphoto/MyPhotoAdmin.keystore
-BT=$ANDROID_HOME/build-tools/37.0.0
-$BT/apksigner sign \
-  --ks "$KS" \
-  --ks-pass pass:android --key-pass pass:android --ks-key-alias androiddebugkey \
-  --out MyPhotoAdmin-1.0.2.apk \
-  app/build/outputs/apk/release/app-release-unsigned.apk
-```
-
-校验签名和版本号（发布前一定做）：
-
-```bash
-$BT/apksigner verify --print-certs MyPhotoAdmin-1.0.2.apk
-$BT/aapt2 dump badging MyPhotoAdmin-1.0.2.apk | head -1
-# 期望看到：package: name='org.yww.myphotoadmin' versionCode='3' versionName='1.0.2'
-sha256sum MyPhotoAdmin-1.0.2.apk
-```
-
-`apksigner verify` 打印的证书 SHA-256 应该是
-`e5c3005a004f0cb3dc7177700af137d4e6749b93ef4364f98259510f7d5a6897`（当前这把 key）。
-不是这个值就说明用错了 keystore，装上去会覆盖失败。
-
-> **keystore 丢了怎么办**：GitHub secret 只能读给 Actions 用、读不回内容，所以它不是一份可以直接取回的备份。
-> 真丢了就只能生成新 key，代价是所有用户必须卸载重装（Android 不允许换签名的覆盖安装）。
-> 建议除了 secret，再在别处（例如密码管理器或离线硬盘）留一份 keystore 文件。
-
-### 3.4 换 key 的后果
+### 3.3 换 key 的后果
 
 Android 只允许**同一签名**的 APK 覆盖安装。签名不一致时安装会失败（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`），
 用户必须先卸载旧版，数据（App 里的设置、登录令牌）也会丢。所以：
@@ -177,7 +186,7 @@ Android 只允许**同一签名**的 APK 覆盖安装。签名不一致时安装
 - 同一台手机上装的所有版本必须用同一把 keystore；
 - 不要因为「debug key 不好看」就换成新生成的 release key，除非愿意让所有人卸载重装。
 
-### 3.5 安装权限
+### 3.4 安装权限
 
 手机上第一次安装来自浏览器/文件管理器的 APK 时，系统会要求给那个应用「允许安装未知应用」。
 App 内更新走的是系统安装界面，同一个开关。这个开关是系统行为，App 这边不需要额外处理（`REQUEST_INSTALL_PACKAGES` 已经声明）。
@@ -189,7 +198,8 @@ App 内更新走的是系统安装界面，同一个开关。这个开关是系�
 
 ```bash
 # 1) 放进目录，文件名建议 MyPhotoAdmin-<version>.apk
-scp MyPhotoAdmin-1.0.2.apk yww@服务器:/home/yww/FtpRoot/ApkFolder/
+#    （产物是在这台机器上下载的，所以是复制；从别处构建的才需要 scp 过来）
+cp /tmp/apk/MyPhotoAdmin-1.0.2.apk /home/yww/FtpRoot/ApkFolder/
 
 # 2) 写 version.json（描述「当前发布的是哪一版」）
 cat > /home/yww/FtpRoot/ApkFolder/version.json <<'EOF'
@@ -262,6 +272,6 @@ sed -i 's/"versionCode": 3/"versionCode": 2/; s/"version": "1.0.2"/"version": "1
 |---|---|
 | `latest` 返回 404 `The server has not published an update yet.` | `ApkFolder` 没配、`version.json` 不存在 / JSON 坏了 / 它指的 APK 不在目录里（这几种情况服务端都会写日志） |
 | App 说「已经是最新版本」 | `versionCode` 没有比 App 的大 |
-| 安装时报签名冲突 | APK 用的 keystore 和手机上已装的不是同一把（见 3.4） |
+| 安装时报签名冲突 | APK 用的 keystore 和手机上已装的不是同一把（见 3.3） |
 | 下载 404 | 文件名和 `version.json` 里的 `fileName` 对不上，或者带了路径分隔符 |
 | 下载中断 | 接口支持 Range，可以续传；nginx 那段的 `proxy_read_timeout` 是 1200s |
